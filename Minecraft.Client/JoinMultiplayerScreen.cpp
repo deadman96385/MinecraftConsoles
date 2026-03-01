@@ -3,6 +3,7 @@
 #include "Button.h"
 #include "EditBox.h"
 #include "Options.h"
+#include "ConnectScreen.h"
 #include "..\Minecraft.World\net.minecraft.locale.h"
 
 JoinMultiplayerScreen::JoinMultiplayerScreen(Screen *lastScreen)
@@ -52,7 +53,7 @@ void JoinMultiplayerScreen::buttonClicked(Button *button)
         minecraft->options->lastMpIp = replaceAll(ip,L":", L"_");
         minecraft->options->save();
 
-        vector<wstring> parts = stringSplit(ip,L'L');
+        vector<wstring> parts = stringSplit(ip,L':');
         if (ip[0]==L'[')
 		{
             int pos = (int)ip.find(L"]");
@@ -81,8 +82,7 @@ void JoinMultiplayerScreen::buttonClicked(Button *button)
 			parts.push_back(ip);
         }
 
-		// 4J - TODO
-//        minecraft->setScreen(new ConnectScreen(minecraft, parts[0], parts.length > 1 ? parseInt(parts[1], 25565) : 25565));
+		minecraft->setScreen(new ConnectScreen(minecraft, parts[0], parts.size() > 1 ? parseInt(parts[1], 25565) : 25565));
     }
 }
 

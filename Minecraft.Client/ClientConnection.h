@@ -90,6 +90,7 @@ public:
     virtual void handleEntityEvent(shared_ptr<EntityEventPacket> packet);
 private:
 	shared_ptr<Entity> getEntity(int entityId);
+	void onClientStartReady(const char *reason);
 	wstring GetDisplayNameByGamertag(wstring gamertag);
 public:
     virtual void handleSetHealth(shared_ptr<SetHealthPacket> packet);

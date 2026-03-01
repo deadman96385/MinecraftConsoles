@@ -4,6 +4,11 @@
 #include "stdafx.h"
 
 #include <assert.h>
+#include <algorithm>
+#include <cctype>
+#include <iostream>
+#include <sstream>
+#include <string>
 #include "GameConfig\Minecraft.spa.h"
 #include "..\MinecraftServer.h"
 #include "..\LocalPlayer.h"
@@ -23,7 +28,6 @@
 #include "..\..\Minecraft.World\Socket.h"
 #include "..\..\Minecraft.World\ThreadName.h"
 #include "..\..\Minecraft.Client\StatsCounter.h"
-#include "..\ConnectScreen.h"
 //#include "Social\SocialManager.h"
 //#include "Leaderboards\LeaderboardManager.h"
 //#include "XUI\XUI_Scene_Container.h"
@@ -87,6 +91,220 @@ int g_iScreenHeight = 1080;
 // Fullscreen toggle state
 static bool g_isFullscreen = false;
 static WINDOWPLACEMENT g_wpPrev = { sizeof(g_wpPrev) };
+
+static volatile LONG g_serverConsoleInputRunning = 0;
+
+static string trimStringA(const string& value)
+{
+	size_t begin = 0;
+	while (begin < value.size() && isspace((unsigned char)value[begin]))
+	{
+		++begin;
+	}
+
+	size_t end = value.size();
+	while (end > begin && isspace((unsigned char)value[end - 1]))
+	{
+		--end;
+	}
+
+	return value.substr(begin, end - begin);
+}
+
+static string stripWrappingQuotes(const string& value)
+{
+	if(value.size() >= 2)
+	{
+		const char first = value[0];
+		const char last = value[value.size() - 1];
+		if((first == '"' && last == '"') || (first == '\'' && last == '\''))
+		{
+			return value.substr(1, value.size() - 2);
+		}
+	}
+	return value;
+}
+
+static bool shouldRunDedicatedServer(const char* cmdLine)
+{
+	if (cmdLine == NULL || cmdLine[0] == '\0')
+	{
+		return false;
+	}
+
+	string token;
+	istringstream args(cmdLine);
+	while (args >> token)
+	{
+		transform(token.begin(), token.end(), token.begin(), ::tolower);
+		if (token == "-server" || token == "--server" || token == "/server")
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool parseConnectEndpoint(const string& endpoint, string& host, int& port)
+{
+	string cleanedEndpoint = trimStringA(stripWrappingQuotes(endpoint));
+	if(cleanedEndpoint.empty())
+	{
+		return false;
+	}
+
+	host = cleanedEndpoint;
+	port = 25565;
+
+	size_t separator = cleanedEndpoint.find_last_of(':');
+	if(separator == string::npos)
+	{
+		return true;
+	}
+
+	const string hostPart = trimStringA(cleanedEndpoint.substr(0, separator));
+	const string portPart = trimStringA(cleanedEndpoint.substr(separator + 1));
+	if(hostPart.empty() || portPart.empty())
+	{
+		return false;
+	}
+
+	for(size_t i = 0; i < portPart.size(); ++i)
+	{
+		if(!isdigit((unsigned char)portPart[i]))
+		{
+			return false;
+		}
+	}
+
+	int parsedPort = atoi(portPart.c_str());
+	if(parsedPort <= 0 || parsedPort > 65535)
+	{
+		return false;
+	}
+
+	host = hostPart;
+	port = parsedPort;
+	return true;
+}
+
+static bool tryGetDirectConnectArgs(const char* cmdLine, string& host, int& port)
+{
+	if (cmdLine == NULL || cmdLine[0] == '\0')
+	{
+		return false;
+	}
+
+	string token;
+	istringstream args(cmdLine);
+	while (args >> token)
+	{
+		token = stripWrappingQuotes(token);
+		string compareToken = token;
+		transform(compareToken.begin(), compareToken.end(), compareToken.begin(), ::tolower);
+
+		if(compareToken == "-connect" || compareToken == "--connect" || compareToken == "/connect")
+		{
+			string endpoint;
+			if(!(args >> endpoint))
+			{
+				return false;
+			}
+			endpoint = stripWrappingQuotes(endpoint);
+			return parseConnectEndpoint(endpoint, host, port);
+		}
+
+		const string connectPrefixA = "-connect=";
+		const string connectPrefixB = "--connect=";
+		if(compareToken.find(connectPrefixA) == 0)
+		{
+			return parseConnectEndpoint(token.substr(connectPrefixA.length()), host, port);
+		}
+		if(compareToken.find(connectPrefixB) == 0)
+		{
+			return parseConnectEndpoint(token.substr(connectPrefixB.length()), host, port);
+		}
+	}
+
+	return false;
+}
+
+static void queueDedicatedServerConsoleCommand(const string& line)
+{
+	if (MinecraftServer::serverHalted())
+	{
+		return;
+	}
+
+	MinecraftServer* server = MinecraftServer::getInstance();
+	if (server == NULL)
+	{
+		return;
+	}
+
+	wstring command = trimString(convStringToWstring(line));
+	if (command.empty())
+	{
+		return;
+	}
+
+	server->handleConsoleInput(command, server);
+}
+
+static void prepareDedicatedServerConsole()
+{
+	// Always use a dedicated console window for the server instead of reusing
+	// whatever terminal launched the process.
+	FreeConsole();
+	AllocConsole();
+
+	FILE* redirected = NULL;
+	freopen_s(&redirected, "CONIN$", "r", stdin);
+	freopen_s(&redirected, "CONOUT$", "w", stdout);
+	freopen_s(&redirected, "CONOUT$", "w", stderr);
+
+	setvbuf(stdin, NULL, _IONBF, 0);
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+
+	HANDLE inputHandle = GetStdHandle(STD_INPUT_HANDLE);
+	DWORD inputMode = 0;
+	if (inputHandle != INVALID_HANDLE_VALUE && GetConsoleMode(inputHandle, &inputMode))
+	{
+		inputMode |= ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT;
+		SetConsoleMode(inputHandle, inputMode);
+	}
+
+	SetConsoleTitleA("Minecraft Dedicated Server");
+}
+
+static int ServerConsoleInputThreadProc(void* lpParam)
+{
+	UNREFERENCED_PARAMETER(lpParam);
+
+	while (InterlockedCompareExchange(&g_serverConsoleInputRunning, 0, 0) != 0)
+	{
+		cout << "mc> " << flush;
+
+		string line;
+		if (!getline(cin, line))
+		{
+			Sleep(25);
+			continue;
+		}
+
+		line = trimStringA(line);
+		if (line.empty())
+		{
+			continue;
+		}
+
+		queueDedicatedServerConsoleCommand(line);
+	}
+
+	return 0;
+}
 
 void DefineActions(void)
 {
@@ -713,7 +931,36 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 					   _In_ int       nCmdShow)
 {
 	UNREFERENCED_PARAMETER(hPrevInstance);
-	UNREFERENCED_PARAMETER(lpCmdLine);
+
+	const bool runDedicatedServer = shouldRunDedicatedServer(lpCmdLine);
+	string directConnectHost;
+	int directConnectPort = 25565;
+	const bool runDirectConnect = !runDedicatedServer && tryGetDirectConnectArgs(lpCmdLine, directConnectHost, directConnectPort);
+	if (runDedicatedServer)
+	{
+		prepareDedicatedServerConsole();
+		nCmdShow = SW_HIDE;
+	}
+
+	WCHAR exePath[MAX_PATH] = { 0 };
+	GetModuleFileNameW(NULL, exePath, MAX_PATH);
+	WCHAR* lastSlash = wcsrchr(exePath, L'\\');
+	if (lastSlash) {
+		*lastSlash = L'\0';
+
+		WCHAR devCheckPath[MAX_PATH] = { 0 };
+		swprintf_s(devCheckPath, MAX_PATH, L"%s\\..\\..\\Minecraft.Client\\Minecraft.Client.vcxproj", exePath);
+
+		if (GetFileAttributesW(devCheckPath) != INVALID_FILE_ATTRIBUTES) {
+			WCHAR projectPath[MAX_PATH] = { 0 };
+			swprintf_s(projectPath, MAX_PATH, L"%s\\..\\..\\Minecraft.Client", exePath);
+			SetCurrentDirectoryW(projectPath);
+		}
+		else {
+			SetCurrentDirectoryW(exePath);
+		}
+	}
+
 
 	// Declare DPI awareness so GetSystemMetrics returns physical pixels
 	SetProcessDPIAware();
@@ -726,7 +973,7 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 		OutputDebugStringA(buf);
 	}
 
-	if(lpCmdLine)
+	if(lpCmdLine && !runDedicatedServer)
 	{
 		if(lpCmdLine[0] == '1')
 		{
@@ -960,6 +1207,76 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 
 	app.InitGameSettings();
 
+	if (runDirectConnect && pMinecraft != NULL)
+	{
+		app.DebugPrintf("Starting direct connect to %s:%d (IUI flow)\n", directConnectHost.c_str(), directConnectPort);
+
+		const int primaryPad = ProfileManager.GetPrimaryPad();
+		const int localUsersMask = g_NetworkManager.GetLocalPlayerMask(primaryPad);
+		pMinecraft->clearConnectionFailed();
+		app.SetTutorialMode(false);
+		g_NetworkManager.SetLocalGame(false);
+
+#ifndef _XBOX
+		// Ensure the local player wrapper exists before switching to join state.
+		// If this is done after JoinGameFromInviteInfo in the stub path, a temporary
+		// non-TCP socket can be created and interfere with the real direct socket.
+		if(g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad) == NULL)
+		{
+			g_NetworkManager.FakeLocalPlayerJoined();
+		}
+#endif
+
+		if(!g_NetworkManager.JoinGameFromInviteInfo(primaryPad, localUsersMask, NULL))
+		{
+			app.DebugPrintf("Failed to enter client session state for direct connect\n");
+		}
+
+		INetworkPlayer *localPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad);
+		if(localPlayer == NULL)
+		{
+			app.DebugPrintf("Direct connect failed: local network player not available\n");
+		}
+		else
+		{
+				Socket *existingSocket = localPlayer->GetSocket();
+				if(existingSocket != NULL)
+				{
+					// Do not delete here: active Connection instances may still own/use this socket.
+					if(!existingSocket->close(false))
+					{
+						existingSocket->close(true);
+					}
+					localPlayer->SetSocket(NULL);
+				}
+
+			Socket *directSocket = new Socket(convStringToWstring(directConnectHost), directConnectPort);
+			if(!directSocket->createdOk)
+			{
+				app.DebugPrintf("Direct connect failed: unable to open TCP socket to %s:%d\n", directConnectHost.c_str(), directConnectPort);
+				delete directSocket;
+			}
+			else
+			{
+				localPlayer->SetSocket(directSocket);
+				directSocket->setPlayer(localPlayer);
+
+				LoadingInputParams *loadingParams = new LoadingInputParams();
+				loadingParams->func = &CGameNetworkManager::RunNetworkGameThreadProc;
+				loadingParams->lpParam = NULL;
+
+				UIFullscreenProgressCompletionData *completionData = new UIFullscreenProgressCompletionData();
+				completionData->bShowBackground = TRUE;
+				completionData->bShowLogo = TRUE;
+				completionData->type = e_ProgressCompletion_CloseAllPlayersUIScenes;
+				completionData->iPad = DEFAULT_XUI_MENU_USER;
+				loadingParams->completionData = completionData;
+
+				ui.NavigateToScene(primaryPad, eUIScene_FullscreenProgress, loadingParams);
+			}
+		}
+	}
+
 #if 0
 	//bool bDisplayPauseMenu=false;
 
@@ -1010,6 +1327,31 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 	// Set the default sound levels
 	pMinecraft->options->set(Options::Option::MUSIC,1.0f);
 	pMinecraft->options->set(Options::Option::SOUND,1.0f);
+
+	if (runDedicatedServer)
+	{
+		app.DebugPrintf("Starting dedicated server mode.\n");
+		app.DebugPrintf("Type 'help' for server commands.\n");
+		app.TemporaryCreateGameStart();
+
+		InterlockedExchange(&g_serverConsoleInputRunning, 1);
+		C4JThread* consoleThread = new C4JThread(&ServerConsoleInputThreadProc, NULL, "ServerConsole");
+		consoleThread->Run();
+
+		while (!MinecraftServer::serverHalted() && g_NetworkManager.IsInSession())
+		{
+			g_NetworkManager.DoWork();
+			Sleep(50);
+		}
+
+		InterlockedExchange(&g_serverConsoleInputRunning, 0);
+		MinecraftServer::HaltServer();
+		g_NetworkManager.LeaveGame(false);
+
+		g_NetworkManager.Terminate();
+		CleanupDevice();
+		return 0;
+	}
 
 	//app.TemporaryCreateGameStart();
 

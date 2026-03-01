@@ -1,6 +1,8 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 2012
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.37012.4 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Minecraft.World", "Minecraft.World\Minecraft.World.vcxproj", "{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Minecraft.Client", "Minecraft.Client\Minecraft.Client.vcxproj", "{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}"
@@ -46,6 +48,12 @@ Global
 		ReleaseForArt|PSVita = ReleaseForArt|PSVita
 		ReleaseForArt|Windows64 = ReleaseForArt|Windows64
 		ReleaseForArt|Xbox 360 = ReleaseForArt|Xbox 360
+		Server|Durango = Server|Durango
+		Server|ORBIS = Server|ORBIS
+		Server|PS3 = Server|PS3
+		Server|PSVita = Server|PSVita
+		Server|Windows64 = Server|Windows64
+		Server|Xbox 360 = Server|Xbox 360
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.ContentPackage_NO_TU|Durango.ActiveCfg = ContentPackage_NO_TU|Durango
@@ -118,6 +126,18 @@ Global
 		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.ReleaseForArt|Windows64.ActiveCfg = ReleaseForArt|x64
 		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.ReleaseForArt|Xbox 360.ActiveCfg = ReleaseForArt|Xbox 360
 		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.ReleaseForArt|Xbox 360.Build.0 = ReleaseForArt|Xbox 360
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|Durango.ActiveCfg = ContentPackage_Vita|Durango
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|Durango.Build.0 = ContentPackage_Vita|Durango
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|ORBIS.ActiveCfg = ContentPackage_Vita|ORBIS
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|ORBIS.Build.0 = ContentPackage_Vita|ORBIS
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|PS3.ActiveCfg = ContentPackage_Vita|PS3
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|PS3.Build.0 = ContentPackage_Vita|PS3
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|PSVita.ActiveCfg = ContentPackage_Vita|PSVita
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|PSVita.Build.0 = ContentPackage_Vita|PSVita
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|Windows64.ActiveCfg = Release|x64
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|Windows64.Build.0 = Release|x64
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|Xbox 360.ActiveCfg = ContentPackage_Vita|Xbox 360
+		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|Xbox 360.Build.0 = ContentPackage_Vita|Xbox 360
 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ContentPackage_NO_TU|Durango.ActiveCfg = ContentPackage_NO_TU|Durango
 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ContentPackage_NO_TU|Durango.Build.0 = ContentPackage_NO_TU|Durango
 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ContentPackage_NO_TU|ORBIS.ActiveCfg = ContentPackage_NO_TU|ORBIS
@@ -191,6 +211,18 @@ Global
 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ReleaseForArt|Windows64.ActiveCfg = ReleaseForArt|x64
 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ReleaseForArt|Xbox 360.ActiveCfg = Release|Xbox 360
 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ReleaseForArt|Xbox 360.Build.0 = Release|Xbox 360
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|Durango.ActiveCfg = ContentPackage_Vita|Durango
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|Durango.Build.0 = ContentPackage_Vita|Durango
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|ORBIS.ActiveCfg = ContentPackage_Vita|ORBIS
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|ORBIS.Build.0 = ContentPackage_Vita|ORBIS
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|PS3.ActiveCfg = ContentPackage_Vita|PS3
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|PS3.Build.0 = ContentPackage_Vita|PS3
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|PSVita.ActiveCfg = ContentPackage_Vita|PSVita
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|PSVita.Build.0 = ContentPackage_Vita|PSVita
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|Windows64.ActiveCfg = Release|x64
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|Windows64.Build.0 = Release|x64
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|Xbox 360.ActiveCfg = ContentPackage_Vita|Xbox 360
+		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|Xbox 360.Build.0 = ContentPackage_Vita|Xbox 360
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

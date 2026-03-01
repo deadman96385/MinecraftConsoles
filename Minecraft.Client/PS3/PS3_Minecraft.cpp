@@ -16,7 +16,7 @@ SYS_PROCESS_PARAM(1001, 0x10000);  // thread priority, and stack size
 #include <cell/audio.h>
 #include <sysutil/sysutil_gamecontent.h>
 //#include <sysutil/sysutil_screenshot.h>
-
+#include "../GuiParticles.h"
 #include "Leaderboards\PS3LeaderboardManager.h"
 #include "PS3\PS3Extras\PS3Strings.h"
 #include "PS3\PS3Extras\ShutdownManager.h"
@@ -88,6 +88,14 @@ char secureFileId[CELL_SAVEDATA_SECUREFILEID_SIZE] =
 #include "..\..\Minecraft.Client\Options.h"
 #include "Sentient\SentientManager.h"
 #include "..\..\Minecraft.World\IntCache.h"
+
+#ifndef PS3_BOOT_DIRECT_CONNECT_HOST
+#define PS3_BOOT_DIRECT_CONNECT_HOST L""
+#endif
+
+#ifndef PS3_BOOT_DIRECT_CONNECT_PORT
+#define PS3_BOOT_DIRECT_CONNECT_PORT 25565
+#endif
 #include "..\Textures.h"
 #include "Resource.h"
 #include "..\..\Minecraft.World\compression.h"
@@ -961,10 +969,10 @@ int main()
 	}
 	else
 	{
-		StorageManager.SetGameSaveFolderTitle((WCHAR *)app.GetString(IDS_GAMENAME));//"Minecraft: PlayStation®3 Edition");//GAMENAME);
+		StorageManager.SetGameSaveFolderTitle((WCHAR *)app.GetString(IDS_GAMENAME));//"Minecraft: PlayStationï¿½3 Edition");//GAMENAME);
 	}
-	StorageManager.SetSaveCacheFolderTitle((WCHAR *)app.GetString(IDS_SAVECACHEFILE));//"Minecraft: PlayStation®3 Edition");//GAMENAME);
-	StorageManager.SetOptionsFolderTitle((WCHAR *)app.GetString(IDS_OPTIONSFILE));//"Minecraft: PlayStation®3 Edition");//GAMENAME);
+	StorageManager.SetSaveCacheFolderTitle((WCHAR *)app.GetString(IDS_SAVECACHEFILE));//"Minecraft: PlayStationï¿½3 Edition");//GAMENAME);
+	StorageManager.SetOptionsFolderTitle((WCHAR *)app.GetString(IDS_OPTIONSFILE));//"Minecraft: PlayStationï¿½3 Edition");//GAMENAME);
 	StorageManager.SetGameSaveFolderPrefix(app.GetSaveFolderPrefix());
 	StorageManager.SetMaxSaves(99);
 	byteArray baOptionsIcon = app.getArchiveFile(L"DefaultOptionsImage320x176.png");
@@ -1021,6 +1029,13 @@ int main()
 
 	Minecraft::main();
 	Minecraft *pMinecraft=Minecraft::GetInstance();
+	const wchar_t *bootDirectConnectHost = PS3_BOOT_DIRECT_CONNECT_HOST;
+	const bool runBootDirectConnect = (bootDirectConnectHost != NULL && bootDirectConnectHost[0] != L'\0');
+	if(runBootDirectConnect)
+	{
+		app.DebugPrintf("PS3 boot direct connect configured for %ls:%d\n", bootDirectConnectHost, PS3_BOOT_DIRECT_CONNECT_PORT);
+		ui.CloseAllPlayersScenes();
+	}
 
 	app.InitGameSettings(); // - allocates the memory for the game settings
 	// read the options here for controller 0 - this won't actually be actioned until a storagemanager tick later
@@ -1201,6 +1216,22 @@ int main()
 			MemSect(0);
 			pMinecraft->textures->tick(true,false);
 			IntCache::Reset();
+			Screen *activeScreen = pMinecraft->getScreen();
+			ConnectScreen *connectScreen = dynamic_cast<ConnectScreen *>(activeScreen);
+			if(connectScreen != NULL)
+			{
+				// PS3 menus do not run through run_middle(), so tick legacy ConnectScreen here.
+				connectScreen->updateEvents();
+				if(pMinecraft->getScreen() != NULL)
+				{
+					if(pMinecraft->getScreen()->particles != NULL)
+					{
+						pMinecraft->getScreen()->particles->tick();
+					}
+					pMinecraft->getScreen()->tick();
+				}
+				pMinecraft->tickAllConnections();
+			}
 			if( app.GetReallyChangingSessionType() )
 			{
 				pMinecraft->tickAllConnections();		// Added to stop timing out when we are waiting after converting to an offline game

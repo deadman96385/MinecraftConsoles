@@ -85,3 +85,8 @@ void BufferedOutputStream::write(unsigned int b)
 		flush();
 	}
 }
+
+bool BufferedOutputStream::isDirectTcpTransport() const
+{
+	return stream != NULL && stream->isDirectTcpTransport();
+}

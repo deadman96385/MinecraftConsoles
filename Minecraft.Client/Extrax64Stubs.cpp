@@ -34,6 +34,14 @@
 #include <perf.h>
 #endif
 
+#ifndef E_FAIL
+#define E_FAIL ((HRESULT)0x80004005L)
+#endif
+
+#ifndef UNREFERENCED_PARAMETER
+#define UNREFERENCED_PARAMETER(P) (void)(P)
+#endif
+
 #if !defined(__PS3__) && !defined(__ORBIS__) && !defined(__PSVITA__)
 #ifdef _WINDOWS64
 //C4JStorage StorageManager;
@@ -185,28 +193,132 @@ D3DXVECTOR3::D3DXVECTOR3() {}
 D3DXVECTOR3::D3DXVECTOR3(float x,float y,float z) : x(x), y(y), z(z) {}
 D3DXVECTOR3& D3DXVECTOR3::operator += ( CONST D3DXVECTOR3& add ) { x += add.x; y += add.y; z += add.z; return *this; }
 
-BYTE IQNetPlayer::GetSmallId() { return 0; }
+namespace
+{
+bool s_stubIdentityInitialised = false;
+ULONGLONG s_stubXuidBase = 0;
+char s_stubGamertagA[XUSER_MAX_COUNT][32];
+wchar_t s_stubGamertagW[XUSER_MAX_COUNT][32];
+
+DWORD StubSupportedLocalUserMask()
+{
+	DWORD mask = 0;
+	for(unsigned int i = 0; i < XUSER_MAX_COUNT && i < 32; ++i)
+	{
+		mask |= (1u << i);
+	}
+	return mask;
+}
+
+bool StubSupportsLocalUser(DWORD userIndex)
+{
+	return userIndex < XUSER_MAX_COUNT;
+}
+
+DWORD StubClampLocalUserMask(DWORD usersMask)
+{
+	DWORD clampedMask = usersMask & StubSupportedLocalUserMask();
+	if(clampedMask == 0)
+	{
+		clampedMask = (1u << 0);
+	}
+	return clampedMask;
+}
+
+void EnsureStubIdentity()
+{
+	if(s_stubIdentityInitialised)
+	{
+		return;
+	}
+
+	DWORD pid = 1;
+#ifdef _WINDOWS64
+	pid = GetCurrentProcessId();
+#endif
+	s_stubXuidBase = 0xE000D45200000000ULL | ((ULONGLONG)(pid & 0x00FFFFFF) << 8);
+
+	for(unsigned int i = 0; i < XUSER_MAX_COUNT; ++i)
+	{
+#ifdef _WINDOWS64
+		sprintf_s(s_stubGamertagA[i], sizeof(s_stubGamertagA[i]), "Player%u-%u", pid % 10000, i);
+#else
+		snprintf(s_stubGamertagA[i], sizeof(s_stubGamertagA[i]), "Player%u-%u", pid % 10000, i);
+#endif
+	}
+	for(unsigned int i = 0; i < XUSER_MAX_COUNT; ++i)
+	{
+		swprintf(s_stubGamertagW[i], 32, L"Player%u-%u", pid % 10000, i);
+	}
+
+	s_stubIdentityInitialised = true;
+}
+}
+
+extern bool _bQNetStubIsHost;
+BYTE IQNetPlayer::GetSmallId()
+{
+	int idx = (int)(this - &IQNet::m_player[0]);
+	if(idx < 0 || idx >= (int)XUSER_MAX_COUNT)
+	{
+		return 0;
+	}
+	if(!_bQNetStubIsHost)
+	{
+		// When acting as a client, reserve small id 0 for the remote host.
+		return (BYTE)(idx + 1);
+	}
+	return (BYTE)idx;
+}
 void IQNetPlayer::SendData(IQNetPlayer *player, const void *pvData, DWORD dwDataSize, DWORD dwFlags)
 {
 	app.DebugPrintf("Sending from 0x%x to 0x%x %d bytes\n",this,player,dwDataSize);
 }
-bool IQNetPlayer::IsSameSystem(IQNetPlayer *player) { return true; }
+bool IQNetPlayer::IsSameSystem(IQNetPlayer *player)
+{
+	if(player == NULL)
+	{
+		return false;
+	}
+
+	ULONG_PTR ptr = (ULONG_PTR)player;
+	ULONG_PTR begin = (ULONG_PTR)&IQNet::m_player[0];
+	ULONG_PTR end = (ULONG_PTR)&IQNet::m_player[XUSER_MAX_COUNT];
+	return (ptr >= begin && ptr < end);
+}
 DWORD IQNetPlayer::GetSendQueueSize( IQNetPlayer *player, DWORD dwFlags ) { return 0; }
 DWORD IQNetPlayer::GetCurrentRtt() { return 0; }
-bool IQNetPlayer::IsHost() { return this == &IQNet::m_player[0]; }
+extern bool _bQNetStubIsHost;
+bool IQNetPlayer::IsHost() { return _bQNetStubIsHost && this == &IQNet::m_player[0]; }
 bool IQNetPlayer::IsGuest() { return false; }
 bool IQNetPlayer::IsLocal() { return true; }
-PlayerUID IQNetPlayer::GetXuid() { return INVALID_XUID; }
+PlayerUID IQNetPlayer::GetXuid()
+{
+	EnsureStubIdentity();
+	int idx = (int)(this - &IQNet::m_player[0]);
+	if(idx < 0 || idx >= (int)XUSER_MAX_COUNT)
+	{
+		idx = 0;
+	}
+#if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+	PlayerUID uid;
+	uid.setUserID(0x70000000u | (unsigned int)(idx & 0xFF));
+	return uid;
+#else
+	return (s_stubXuidBase + (ULONGLONG)(idx & 0x0F)) | 0x100000000ULL;
+#endif
+}
 LPCWSTR IQNetPlayer::GetGamertag()
 {
-	static wchar_t tags[4][16];
-	int idx = GetUserIndex();
-	if(idx < 0 || idx >= 4) idx = 0;
-	mbstowcs(tags[idx], ProfileManager.GetGamertag(idx), 15);
-	tags[idx][15] = L'\0';
-	return tags[idx];
+	EnsureStubIdentity();
+	int idx = (int)(this - &IQNet::m_player[0]);
+	if(idx < 0 || idx >= (int)XUSER_MAX_COUNT)
+	{
+		idx = 0;
+	}
+	return s_stubGamertagW[idx];
 }
-int IQNetPlayer::GetSessionIndex() { return 0; }
+int IQNetPlayer::GetSessionIndex() { return GetSmallId(); }
 bool IQNetPlayer::IsTalking() { return false; }
 bool IQNetPlayer::IsMutedByLocalUser(DWORD dwUserIndex) { return false; }
 bool IQNetPlayer::HasVoice() { return false; }
@@ -222,19 +334,154 @@ ULONG_PTR IQNetPlayer::GetCustomDataValue() {
 IQNetPlayer IQNet::m_player[4];
 
 bool _bQNetStubGameRunning = false;
+bool _bQNetStubIsHost = true;
+DWORD _dwQNetStubLocalUsersMask = (1u << 0);
 
-HRESULT IQNet::AddLocalPlayerByUserIndex(DWORD dwUserIndex){ return S_OK; }
+HRESULT IQNet::AddLocalPlayerByUserIndex(DWORD dwUserIndex)
+{
+	if(!StubSupportsLocalUser(dwUserIndex))
+	{
+		return E_FAIL;
+	}
+
+	_dwQNetStubLocalUsersMask |= (1u << dwUserIndex);
+	return S_OK;
+}
 IQNetPlayer *IQNet::GetHostPlayer() { return &m_player[0]; }
-IQNetPlayer *IQNet::GetLocalPlayerByUserIndex(DWORD dwUserIndex) { return &m_player[dwUserIndex]; } 
-IQNetPlayer *IQNet::GetPlayerByIndex(DWORD dwPlayerIndex) { return &m_player[0]; }
-IQNetPlayer *IQNet::GetPlayerBySmallId(BYTE SmallId){ return &m_player[0]; }
-IQNetPlayer *IQNet::GetPlayerByXuid(PlayerUID xuid){ return &m_player[0]; }
-DWORD IQNet::GetPlayerCount() { return 1; }
+IQNetPlayer *IQNet::GetLocalPlayerByUserIndex(DWORD dwUserIndex)
+{
+	if(!StubSupportsLocalUser(dwUserIndex))
+	{
+		return NULL;
+	}
+
+	return (_dwQNetStubLocalUsersMask & (1u << dwUserIndex)) ? &m_player[dwUserIndex] : NULL;
+}
+IQNetPlayer *IQNet::GetPlayerByIndex(DWORD dwPlayerIndex)
+{
+	if(!_bQNetStubGameRunning)
+	{
+		return NULL;
+	}
+
+	DWORD currentIndex = 0;
+	for(DWORD localUser = 0; localUser < XUSER_MAX_COUNT; ++localUser)
+	{
+		if((_dwQNetStubLocalUsersMask & (1u << localUser)) == 0)
+		{
+			continue;
+		}
+
+		if(currentIndex == dwPlayerIndex)
+		{
+			return &m_player[localUser];
+		}
+
+		++currentIndex;
+	}
+
+	return NULL;
+}
+IQNetPlayer *IQNet::GetPlayerBySmallId(BYTE SmallId)
+{
+	if(!_bQNetStubGameRunning)
+	{
+		return NULL;
+	}
+
+	for(DWORD localUser = 0; localUser < XUSER_MAX_COUNT; ++localUser)
+	{
+		if((_dwQNetStubLocalUsersMask & (1u << localUser)) == 0)
+		{
+			continue;
+		}
+
+		if(m_player[localUser].GetSmallId() == SmallId)
+		{
+			return &m_player[localUser];
+		}
+	}
+
+	return NULL;
+}
+IQNetPlayer *IQNet::GetPlayerByXuid(PlayerUID xuid)
+{
+	if(!_bQNetStubGameRunning)
+	{
+		return NULL;
+	}
+
+	for(DWORD localUser = 0; localUser < XUSER_MAX_COUNT; ++localUser)
+	{
+		if((_dwQNetStubLocalUsersMask & (1u << localUser)) == 0)
+		{
+			continue;
+		}
+
+			IQNetPlayer *localPlayer = &m_player[localUser];
+			PlayerUID localXuidOnline = localPlayer->GetXuid();
+#if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__) || defined(_DURANGO)
+			if(xuid == localXuidOnline)
+			{
+				return localPlayer;
+			}
+#else
+			PlayerUID localXuidOffline = localXuidOnline & ~0x100000000ULL;
+			if(xuid == localXuidOnline || xuid == localXuidOffline)
+			{
+				return localPlayer;
+			}
+#endif
+		}
+
+	return NULL;
+}
+DWORD IQNet::GetPlayerCount()
+{
+	if(!_bQNetStubGameRunning)
+	{
+		return 0;
+	}
+
+	DWORD count = 0;
+	for(DWORD localUser = 0; localUser < XUSER_MAX_COUNT; ++localUser)
+	{
+		if(_dwQNetStubLocalUsersMask & (1u << localUser))
+		{
+			++count;
+		}
+	}
+
+	return count;
+}
 QNET_STATE IQNet::GetState() { return _bQNetStubGameRunning ? QNET_STATE_GAME_PLAY : QNET_STATE_IDLE; }
-bool IQNet::IsHost() { return true; }
-HRESULT IQNet::JoinGameFromInviteInfo(DWORD dwUserIndex, DWORD dwUserMask, const INVITE_INFO *pInviteInfo) { return S_OK; }
-void IQNet::HostGame() { _bQNetStubGameRunning = true; }
-void IQNet::EndGame() { _bQNetStubGameRunning = false; }
+bool IQNet::IsHost() { return _bQNetStubIsHost; }
+HRESULT IQNet::JoinGameFromInviteInfo(DWORD dwUserIndex, DWORD dwUserMask, const INVITE_INFO *pInviteInfo)
+{
+	UNREFERENCED_PARAMETER(dwUserIndex);
+	UNREFERENCED_PARAMETER(pInviteInfo);
+	_bQNetStubIsHost = false;
+	_bQNetStubGameRunning = true;
+	_dwQNetStubLocalUsersMask = StubClampLocalUserMask(dwUserMask);
+	if(StubSupportsLocalUser(dwUserIndex))
+	{
+		_dwQNetStubLocalUsersMask |= (1u << dwUserIndex);
+	}
+	_dwQNetStubLocalUsersMask = StubClampLocalUserMask(_dwQNetStubLocalUsersMask);
+	return S_OK;
+}
+void IQNet::HostGame()
+{
+	_bQNetStubIsHost = true;
+	_bQNetStubGameRunning = true;
+	_dwQNetStubLocalUsersMask = (1u << 0);
+}
+void IQNet::EndGame()
+{
+	_bQNetStubGameRunning = false;
+	_bQNetStubIsHost = true;
+	_dwQNetStubLocalUsersMask = (1u << 0);
+}
 
 DWORD MinecraftDynamicConfigurations::GetTrialTime() { return DYNAMIC_CONFIG_DEFAULT_TRIAL_TIME; }
 
@@ -249,7 +496,25 @@ DWORD XUserGetSigninInfo(
          PXUSER_SIGNIN_INFO pSigninInfo
 )
 {
-	return 0;
+	if(pSigninInfo == NULL)
+	{
+		return E_FAIL;
+	}
+
+	if(!ProfileManager.IsSignedIn((int)dwUserIndex))
+	{
+		pSigninInfo->xuid = INVALID_XUID;
+		pSigninInfo->dwGuestNumber = 0;
+		return E_FAIL;
+	}
+
+	PlayerUID xuid = INVALID_XUID;
+	const bool onlineXuid = (dwFlags & XUSER_GET_SIGNIN_INFO_ONLINE_XUID_ONLY) != 0;
+	ProfileManager.GetXUID((int)dwUserIndex, &xuid, onlineXuid);
+	pSigninInfo->xuid = xuid;
+	pSigninInfo->dwGuestNumber = 0;
+
+	return S_OK;
 }
 
 LPCWSTR CXuiStringTable::Lookup(LPCWSTR szId) { return szId; }
@@ -391,6 +656,7 @@ DWORD XEnableGuestSignin(BOOL fEnable) { return 0; }
 #ifdef _WINDOWS64
 static void *profileData[4];
 static bool s_bProfileIsFullVersion;
+static int s_iPrimaryPad = 0;
 void				C_4JProfile::Initialise( DWORD dwTitleID,
 								DWORD dwOfferID,
 								unsigned short usProfileVersion,
@@ -460,16 +726,43 @@ void				C_4JProfile::SetTrialTextStringTable(CXuiStringTable *pStringTable,int i
 void				C_4JProfile::SetTrialAwardText(eAwardType AwardType,int iTitle,int iText) {}
 int					C_4JProfile::GetLockedProfile() { return 0; }
 void				C_4JProfile::SetLockedProfile(int iProf) {}
-bool				C_4JProfile::IsSignedIn(int iQuadrant) { return ( iQuadrant == 0); }
-bool				C_4JProfile::IsSignedInLive(int iProf) { return true; }
+bool				C_4JProfile::IsSignedIn(int iQuadrant)
+{
+	if(iQuadrant < 0 || iQuadrant >= (int)XUSER_MAX_COUNT)
+	{
+		return false;
+	}
+
+	if(iQuadrant == 0)
+	{
+		return true;
+	}
+
+	return InputManager.IsPadConnected(iQuadrant);
+}
+bool				C_4JProfile::IsSignedInLive(int iProf) { return IsSignedIn(iProf); }
 bool				C_4JProfile::IsGuest(int iQuadrant) { return false; }
 UINT				C_4JProfile::RequestSignInUI(bool bFromInvite,bool bLocalGame,bool bNoGuestsAllowed,bool bMultiplayerSignIn,bool bAddUser, int( *Func)(LPVOID,const bool, const int iPad),LPVOID lpParam,int iQuadrant) { return 0; }
 UINT				C_4JProfile::DisplayOfflineProfile(int( *Func)(LPVOID,const bool, const int iPad),LPVOID lpParam,int iQuadrant)  { return 0; }
 UINT				C_4JProfile::RequestConvertOfflineToGuestUI(int( *Func)(LPVOID,const bool, const int iPad),LPVOID lpParam,int iQuadrant) { return 0; }
 void				C_4JProfile::SetPrimaryPlayerChanged(bool bVal) {}
 bool				C_4JProfile::QuerySigninStatus(void) { return true; }
-void				C_4JProfile::GetXUID(int iPad, PlayerUID *pXuid,bool bOnlineXuid) {*pXuid = 0xe000d45248242f2e; }
-BOOL				C_4JProfile::AreXUIDSEqual(PlayerUID xuid1,PlayerUID xuid2) { return false; }
+void				C_4JProfile::GetXUID(int iPad, PlayerUID *pXuid,bool bOnlineXuid)
+{
+	EnsureStubIdentity();
+	if(pXuid == NULL)
+	{
+		return;
+	}
+
+	ULONGLONG value = s_stubXuidBase + (ULONGLONG)(iPad & 0x0F);
+	if(bOnlineXuid)
+	{
+		value |= 0x100000000ULL;
+	}
+	*pXuid = value;
+}
+BOOL				C_4JProfile::AreXUIDSEqual(PlayerUID xuid1,PlayerUID xuid2) { return xuid1 == xuid2; }
 BOOL				C_4JProfile::XUIDIsGuest(PlayerUID xuid) { return false; }
 bool				C_4JProfile::AllowedToPlayMultiplayer(int iProf) { return true; }
 
@@ -488,8 +781,18 @@ void				C_4JProfile::AllowedPlayerCreatedContent(int iPad, bool thisQuadrantOnly
 BOOL				C_4JProfile::CanViewPlayerCreatedContent(int iPad, bool thisQuadrantOnly, PPlayerUID pXuids, DWORD dwXuidCount ) { return true; }
 bool				C_4JProfile::GetProfileAvatar(int iPad,int( *Func)(LPVOID lpParam,PBYTE pbThumbnail,DWORD dwThumbnailBytes), LPVOID lpParam) { return false; }
 void				C_4JProfile::CancelProfileAvatarRequest() {}
-int					C_4JProfile::GetPrimaryPad() { return 0; }
-void				C_4JProfile::SetPrimaryPad(int iPad) {}
+int					C_4JProfile::GetPrimaryPad() { return s_iPrimaryPad; }
+void				C_4JProfile::SetPrimaryPad(int iPad)
+{
+	if(iPad >= 0 && iPad < (int)XUSER_MAX_COUNT && IsSignedIn(iPad))
+	{
+		s_iPrimaryPad = iPad;
+	}
+	else
+	{
+		s_iPrimaryPad = 0;
+	}
+}
 #ifdef _DURANGO
 char fakeGamerTag[32] = "PlayerName";
 void				SetFakeGamertag(char *name){ strcpy_s(fakeGamerTag, name); }
@@ -497,19 +800,23 @@ char*				C_4JProfile::GetGamertag(int iPad){ return fakeGamerTag; }
 #else
 char*				C_4JProfile::GetGamertag(int iPad)
 {
-	static char tags[4][16] = { "Player 1", "Player 2", "Player 3", "Player 4" };
-	if(iPad >= 0 && iPad < 4) return tags[iPad];
-	return tags[0];
+	EnsureStubIdentity();
+	if(iPad < 0 || iPad >= (int)XUSER_MAX_COUNT)
+	{
+		iPad = 0;
+	}
+	return s_stubGamertagA[iPad];
 }
 wstring				C_4JProfile::GetDisplayName(int iPad)
 {
-	switch(iPad)
+	EnsureStubIdentity();
+	if(iPad < 0 || iPad >= (int)XUSER_MAX_COUNT)
 	{
-	case 1:  return L"Player 2";
-	case 2:  return L"Player 3";
-	case 3:  return L"Player 4";
-	default: return L"Player 1";
+		iPad = 0;
 	}
+	wchar_t displayName[32];
+	swprintf(displayName, 32, L"%S", s_stubGamertagA[iPad]);
+	return displayName;
 }
 #endif
 bool				C_4JProfile::IsFullVersion() { return s_bProfileIsFullVersion; }

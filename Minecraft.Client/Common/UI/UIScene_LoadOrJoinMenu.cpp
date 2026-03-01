@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "UI.h"
 #include "UIScene_LoadOrJoinMenu.h"
+#include <stdlib.h>
 
 #include "..\..\..\Minecraft.World\StringHelpers.h"
 #include "..\..\..\Minecraft.World\net.minecraft.world.item.h"
@@ -13,7 +14,12 @@
 #include "..\..\MinecraftServer.h"
 #include "..\..\TexturePackRepository.h"
 #include "..\..\TexturePack.h"
+#include "..\..\Minecraft.h"
+#include "..\..\GuiParticles.h"
+#include "..\..\ConnectScreen.h"
 #include "..\Network\SessionInfo.h"
+#include "..\Network\NetworkPlayerInterface.h"
+#include "..\..\..\Minecraft.World\Socket.h"
 #if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
 #include "Common\Network\Sony\SonyHttp.h"
 #include "Common\Network\Sony\SonyRemoteStorage.h"
@@ -50,6 +56,171 @@ wstring UIScene_LoadOrJoinMenu::m_wstrStageText=L"";
 C4JStorage::SAVETRANSFER_FILE_DETAILS UIScene_LoadOrJoinMenu::m_debugTransferDetails;
 #endif
 #endif
+
+namespace
+{
+bool TryParseTcpPort(const wstring& text, int *portOut)
+{
+	if(portOut == NULL)
+	{
+		return false;
+	}
+
+	const wstring trimmed = trimString(text);
+	if(trimmed.empty())
+	{
+		return false;
+	}
+
+	wchar_t *end = NULL;
+	long parsed = wcstol(trimmed.c_str(), &end, 10);
+	if(end == trimmed.c_str() || *end != L'\0' || parsed <= 0 || parsed > 65535)
+	{
+		return false;
+	}
+
+	*portOut = (int)parsed;
+	return true;
+}
+
+bool ParseDirectConnectEndpoint(const wstring& endpoint, wstring *hostOut, int *portOut)
+{
+	if(hostOut == NULL || portOut == NULL)
+	{
+		return false;
+	}
+
+	const wstring trimmed = trimString(endpoint);
+	if(trimmed.empty())
+	{
+		return false;
+	}
+
+	wstring host = trimmed;
+	int port = 25565;
+
+	if(trimmed[0] == L'[')
+	{
+		const size_t closeBracket = trimmed.find(L']');
+		if(closeBracket == wstring::npos)
+		{
+			return false;
+		}
+
+		host = trimString(trimmed.substr(1, closeBracket - 1));
+		const wstring remainder = trimString(trimmed.substr(closeBracket + 1));
+		if(!remainder.empty())
+		{
+			if(remainder[0] != L':')
+			{
+				return false;
+			}
+
+			if(!TryParseTcpPort(remainder.substr(1), &port))
+			{
+				return false;
+			}
+		}
+	}
+	else
+	{
+		vector<wstring> parts = stringSplit(trimmed, L':');
+		if(parts.size() == 2)
+		{
+			host = trimString(parts[0]);
+			if(!TryParseTcpPort(parts[1], &port))
+			{
+				return false;
+			}
+		}
+		else if(parts.size() > 2)
+		{
+			// Treat unbracketed IPv6 as host-only and use default port.
+			host = trimmed;
+		}
+	}
+
+	if(host.empty())
+	{
+		return false;
+	}
+
+	*hostOut = host;
+	*portOut = port;
+	return true;
+}
+
+bool StartDirectConnectViaNetworkFlow(Minecraft *minecraft, const wstring& host, int port, const char *flowTag)
+{
+	if(minecraft == NULL)
+	{
+		return false;
+	}
+
+	const int primaryPad = ProfileManager.GetPrimaryPad();
+	const int localUsersMask = g_NetworkManager.GetLocalPlayerMask(primaryPad);
+
+	minecraft->clearConnectionFailed();
+	app.SetTutorialMode(false);
+	g_NetworkManager.SetLocalGame(false);
+
+#ifndef _XBOX
+	// Ensure local wrapper exists before entering join state for the direct TCP socket.
+	if(g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad) == NULL)
+	{
+		g_NetworkManager.FakeLocalPlayerJoined();
+	}
+#endif
+
+	if(!g_NetworkManager.JoinGameFromInviteInfo(primaryPad, localUsersMask, NULL))
+	{
+		app.DebugPrintf("Direct connect (%s) failed to enter client session state\n", flowTag);
+		return false;
+	}
+
+	INetworkPlayer *localPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad);
+	if(localPlayer == NULL)
+	{
+		app.DebugPrintf("Direct connect (%s) failed: local network player not available\n", flowTag);
+		return false;
+	}
+
+	Socket *existingSocket = localPlayer->GetSocket();
+	if(existingSocket != NULL)
+	{
+		if(!existingSocket->close(false))
+		{
+			existingSocket->close(true);
+		}
+		localPlayer->SetSocket(NULL);
+	}
+
+	Socket *directSocket = new Socket(host, port);
+	if(!directSocket->createdOk)
+	{
+		app.DebugPrintf("Direct connect (%s) failed: unable to open TCP socket to %ls:%d\n", flowTag, host.c_str(), port);
+		delete directSocket;
+		return false;
+	}
+
+	localPlayer->SetSocket(directSocket);
+	directSocket->setPlayer(localPlayer);
+
+	LoadingInputParams *loadingParams = new LoadingInputParams();
+	loadingParams->func = &CGameNetworkManager::RunNetworkGameThreadProc;
+	loadingParams->lpParam = NULL;
+
+	UIFullscreenProgressCompletionData *completionData = new UIFullscreenProgressCompletionData();
+	completionData->bShowBackground = TRUE;
+	completionData->bShowLogo = TRUE;
+	completionData->type = e_ProgressCompletion_CloseAllPlayersUIScenes;
+	completionData->iPad = DEFAULT_XUI_MENU_USER;
+	loadingParams->completionData = completionData;
+
+	ui.NavigateToScene(primaryPad, eUIScene_FullscreenProgress, loadingParams);
+	return true;
+}
+}
 
 int UIScene_LoadOrJoinMenu::LoadSaveDataThumbnailReturned(LPVOID lpParam,PBYTE pbThumbnail,DWORD dwThumbnailBytes)
 {
@@ -124,9 +295,10 @@ UIScene_LoadOrJoinMenu::UIScene_LoadOrJoinMenu(int iPad, void *initData, UILayer
     m_bSavesDisplayed=false;
     m_saveDetails = NULL;
     m_iSaveDetailsCount = 0;
-    m_iTexturePacksNotInstalled = 0;
+	m_iTexturePacksNotInstalled = 0;
 	m_bCopying = false;
 	m_bCopyingCancelled = false;
+	m_directConnectAddress = L"";
 
 #ifndef _XBOX_ONE
     m_bSaveTransferCancelled=false;
@@ -995,9 +1167,27 @@ void UIScene_LoadOrJoinMenu::handleInput(int iPad, int key, bool repeat, bool pr
         break;
     case ACTION_MENU_Y:
 #if defined(__PS3__) || defined(__PSVITA__) || defined(__ORBIS__)
-		m_eAction = eAction_ViewInvites;
         if(pressed && iPad == ProfileManager.GetPrimaryPad())
         {
+#ifdef __PS3__
+			if(m_buttonListGames.getItemCount() == 0)
+			{
+				m_bIgnoreInput = true;
+				InputManager.RequestKeyboard(
+					L"Direct Connect",
+					m_directConnectAddress.c_str(),
+					(DWORD)m_iPad,
+					128,
+					&UIScene_LoadOrJoinMenu::KeyboardCompleteDirectConnectCallback,
+					this,
+					C_4JInput::EKeyboardMode_Default);
+				handled = true;
+				break;
+			}
+#endif
+
+			m_eAction = eAction_ViewInvites;
+
 #ifdef __ORBIS__
 			// Check if PSN is unavailable because of age restriction
 			int npAvailability = ProfileManager.getNPAvailability(iPad);
@@ -1163,6 +1353,75 @@ void UIScene_LoadOrJoinMenu::handleInput(int iPad, int key, bool repeat, bool pr
         handled = true;
         break;
     }
+}
+
+int UIScene_LoadOrJoinMenu::KeyboardCompleteDirectConnectCallback(LPVOID lpParam,bool bRes)
+{
+	UIScene_LoadOrJoinMenu *pClass = (UIScene_LoadOrJoinMenu *)lpParam;
+	if(pClass == NULL)
+	{
+		return 0;
+	}
+
+	pClass->m_bIgnoreInput = false;
+
+	uint16_t text[128];
+	ZeroMemory(text, sizeof(text));
+	InputManager.GetText(text);
+
+	wstring endpoint = trimString((wchar_t *)text);
+	app.DebugPrintf("Direct connect keyboard closed (IUI): bRes=%d endpoint='%ls'\n", bRes ? 1 : 0, endpoint.c_str());
+	if(endpoint.empty())
+	{
+		return 0;
+	}
+
+	bool shouldConnect = bRes;
+#ifdef __PS3__
+	// PS3 keyboard may report cancel despite returning edited text.
+	if(!shouldConnect && endpoint != pClass->m_directConnectAddress)
+	{
+		shouldConnect = true;
+	}
+#endif
+	if(!shouldConnect)
+	{
+		return 0;
+	}
+
+	pClass->m_directConnectAddress = endpoint;
+
+	wstring host;
+	int port = 25565;
+	if(!ParseDirectConnectEndpoint(endpoint, &host, &port))
+	{
+		UINT uiIDA[1];
+		uiIDA[0] = IDS_CONFIRM_OK;
+		ui.RequestMessageBox(IDS_CONNECTION_FAILED, IDS_ERROR_NETWORK, uiIDA, 1, pClass->m_iPad, NULL, NULL, app.GetStringTable());
+		return 0;
+	}
+
+	Minecraft *minecraft = Minecraft::GetInstance();
+	pClass->m_bIgnoreInput = true;
+	app.DebugPrintf("Attempting direct connect (IUI) to %ls:%d\n", host.c_str(), port);
+	if(!StartDirectConnectViaNetworkFlow(minecraft, host, port, "IUI"))
+	{
+		app.DebugPrintf("Direct connect (IUI) falling back to legacy ConnectScreen flow\n");
+		if(minecraft != NULL)
+		{
+			ui.CloseUIScenes(pClass->m_iPad);
+			minecraft->setScreen(new ConnectScreen(minecraft, host, port));
+		}
+		else
+		{
+			pClass->m_bIgnoreInput = false;
+			UINT uiIDA[1];
+			uiIDA[0] = IDS_CONFIRM_OK;
+			ui.RequestMessageBox(IDS_CONNECTION_FAILED, IDS_ERROR_NETWORK, uiIDA, 1, pClass->m_iPad, NULL, NULL, app.GetStringTable());
+		}
+	}
+
+	return 0;
 }
 
 int UIScene_LoadOrJoinMenu::KeyboardCompleteWorldNameCallback(LPVOID lpParam,bool bRes)

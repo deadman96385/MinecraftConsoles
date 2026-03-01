@@ -114,18 +114,34 @@ void BlockRegionUpdatePacket::read(DataInputStream *dis) //throws IOException
 
 		if( success )
 		{
-			Compression::getCompression()->DecompressLZXRLE( buffer.data, &outputSize, compressedBuffer.data, size);
+			HRESULT decompressResult = Compression::getCompression()->DecompressLZXRLE( buffer.data, &outputSize, compressedBuffer.data, size);
+			if(decompressResult != S_OK)
+			{
+				app.DebugPrintf("BlockRegionUpdatePacket decompress failed for (%d,%d,%d) size=%d\n", x, y, z, size);
+				delete [] buffer.data;
+				buffer = byteArray();
+				outputSize = 0;
+			}
 		}
 		else
 		{
 			app.DebugPrintf("Not decompressing packet that wasn't fully read\n");
+			delete [] buffer.data;
+			buffer = byteArray();
+			outputSize = 0;
 		}
 
 	//	printf("Block (%d %d %d), (%d %d %d) coming in decomp from %d to %d\n",x,y,z,xs,ys,zs,size,outputSize);
 	
 
 		delete [] compressedBuffer.data;
-		assert(buffer.length == outputSize);
+		if(buffer.length != outputSize)
+		{
+			app.DebugPrintf("BlockRegionUpdatePacket output size mismatch for (%d,%d,%d): expected=%d actual=%d\n",
+				x, y, z, buffer.length, outputSize);
+			delete [] buffer.data;
+			buffer = byteArray();
+		}
 	}
 }
 
@@ -154,4 +170,3 @@ int BlockRegionUpdatePacket::getEstimatedSize()
 {
 	return 17 + size;
 }
-

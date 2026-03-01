@@ -375,15 +375,23 @@ bool	CGameNetworkManager::StartNetworkGame(Minecraft *minecraft, LPVOID lpParame
 			// Already have setup the primary pad
 			if(idx == ProfileManager.GetPrimaryPad() ) continue;
 
-			if( GetLocalPlayerByUserIndex(idx) != NULL && !ProfileManager.IsSignedIn(idx) )
-			{
-				INetworkPlayer *pNetworkPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(idx);
-				Socket *socket = pNetworkPlayer->GetSocket();
-				app.DebugPrintf("Closing socket due to player %d not being signed in any more\n");
-				if( !socket->close(false) ) socket->close(true);
+				if( GetLocalPlayerByUserIndex(idx) != NULL && !ProfileManager.IsSignedIn(idx) )
+				{
+					INetworkPlayer *pNetworkPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(idx);
+					if(pNetworkPlayer == NULL)
+					{
+						continue;
+					}
+					Socket *socket = pNetworkPlayer->GetSocket();
+					app.DebugPrintf("Closing socket due to player %d not being signed in any more\n", idx);
+					if(socket != NULL)
+					{
+						if( !socket->close(false) ) socket->close(true);
+						pNetworkPlayer->SetSocket(NULL);
+					}
 
-				continue;
-			}
+					continue;
+				}
 
 			// By default when we host we only have the local player, but currently allow multiple local players to join
 			// when joining any other way, so just because they are signed in doesn't mean they are in the session
@@ -1406,8 +1414,40 @@ void CGameNetworkManager::CreateSocket( INetworkPlayer *pNetworkPlayer, bool loc
 	}
 	else
 	{
-		socket = new Socket( pNetworkPlayer, g_NetworkManager.IsHost(), g_NetworkManager.IsHost() && localPlayer );
+		// On Windows direct-connect sessions, each extra local player needs its own TCP socket to the remote host.
+		// The QNet path only provides local queueing and cannot carry traffic to a direct TCP server.
+		if(localPlayer && !g_NetworkManager.IsHost())
+		{
+			INetworkPlayer *hostPlayer = g_NetworkManager.GetHostPlayer();
+			Socket *hostSocket = hostPlayer != NULL ? hostPlayer->GetSocket() : NULL;
+			wstring hostAddress;
+			int hostPort = 0;
+			if(hostSocket != NULL && hostSocket->isTcpTransport() && Socket::GetLastDirectConnectEndpoint(&hostAddress, &hostPort))
+			{
+				Socket *directSocket = new Socket(hostAddress, hostPort);
+				if(directSocket != NULL && directSocket->createdOk)
+				{
+					socket = directSocket;
+					app.DebugPrintf("Created direct socket for local player %d via %ls:%d\n", pNetworkPlayer->GetUserIndex(), hostAddress.c_str(), hostPort);
+				}
+				else
+				{
+					app.DebugPrintf("Failed direct socket for local player %d via %ls:%d, falling back to session socket\n", pNetworkPlayer->GetUserIndex(), hostAddress.c_str(), hostPort);
+					delete directSocket;
+				}
+			}
+		}
+
+		if(socket == NULL)
+		{
+			socket = new Socket( pNetworkPlayer, g_NetworkManager.IsHost(), g_NetworkManager.IsHost() && localPlayer );
+		}
+
 		pNetworkPlayer->SetSocket( socket );
+		if(socket != NULL)
+		{
+			socket->setPlayer(pNetworkPlayer);
+		}
 
 		// 4J Stu - May be other states we want to accept aswell
 		// Add this user to the game server if the game is started already

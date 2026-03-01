@@ -15,12 +15,22 @@ unsigned char NetworkPlayerSony::GetSmallId()
 void NetworkPlayerSony::SendData(INetworkPlayer *player, const void *pvData, int dataSize, bool lowPriority)
 {
 	// TODO - handle priority
-	m_sqrPlayer->SendData( ((NetworkPlayerSony *)player)->m_sqrPlayer, pvData, dataSize );
+	NetworkPlayerSony *networkPlayer = dynamic_cast<NetworkPlayerSony *>(player);
+	if(networkPlayer == NULL)
+	{
+		return;
+	}
+	m_sqrPlayer->SendData(networkPlayer->m_sqrPlayer, pvData, dataSize);
 }
 
 bool NetworkPlayerSony::IsSameSystem(INetworkPlayer *player)
 {
-	return m_sqrPlayer->IsSameSystem(((NetworkPlayerSony *)player)->m_sqrPlayer);
+	NetworkPlayerSony *networkPlayer = dynamic_cast<NetworkPlayerSony *>(player);
+	if(networkPlayer == NULL)
+	{
+		return false;
+	}
+	return m_sqrPlayer->IsSameSystem(networkPlayer->m_sqrPlayer);
 }
 
 int NetworkPlayerSony::GetSendQueueSizeBytes( INetworkPlayer *player, bool lowPriority )

@@ -20,4 +20,5 @@ public:
 	virtual void write(byteArray b, unsigned int offset, unsigned int length);
 	virtual void write(byteArray b);
 	virtual void write(unsigned int b);
+	virtual bool isDirectTcpTransport() const;
 };

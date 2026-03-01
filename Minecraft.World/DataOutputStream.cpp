@@ -3,6 +3,32 @@
 
 #include "DataOutputStream.h"
 
+#if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+static unsigned long long BuildPortableDirectTcpPlayerUid(const PlayerUID& player)
+{
+	if(player == INVALID_XUID)
+	{
+		return 0ULL;
+	}
+
+	// Use a stable hash so Sony PlayerUID layouts can be represented in the 64-bit
+	// wire format used by non-Sony direct TCP builds.
+	const unsigned char *playerBytes = (const unsigned char *)&player;
+	unsigned long long hash = 1469598103934665603ULL; // FNV-1a offset basis
+	for(unsigned int i = 0; i < sizeof(PlayerUID); ++i)
+	{
+		hash ^= (unsigned long long)playerBytes[i];
+		hash *= 1099511628211ULL; // FNV-1a prime
+	}
+
+	if(hash == 0ULL)
+	{
+		hash = 1ULL;
+	}
+	return hash;
+}
+#endif
+
 //Creates a new data output stream to write data to the specified underlying output stream. The counter written is set to zero.
 //Parameters:
 //out - the underlying output stream, to be saved for later use.
@@ -258,6 +284,12 @@ void DataOutputStream::writeUTF(const wstring& str)
 void DataOutputStream::writePlayerUID(PlayerUID player)
 {
 #if defined(__PS3__) || defined(__ORBIS__) || defined (__PSVITA__)
+	if(stream != NULL && stream->isDirectTcpTransport())
+	{
+		writeLong((__int64)BuildPortableDirectTcpPlayerUid(player));
+		return;
+	}
+
 	for(int idPos=0;idPos<sizeof(PlayerUID); idPos++)
 		writeByte(((char*)&player)[idPos]);
 #elif defined(_DURANGO)

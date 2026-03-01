@@ -294,6 +294,10 @@ bool Connection::readTick()
 
 	if (packet != NULL)
 	{
+		if(socket != NULL && socket->isTcpTransport())
+		{
+			// app.DebugPrintf("Direct TCP packet received: id=%d\n", packet->getId());
+		}
 		readSizes[packet->getId()] += packet->getEstimatedSize() + 1;
 		EnterCriticalSection(&incoming_cs);
 		if(!quitting)
@@ -456,7 +460,10 @@ void Connection::tick()
 	EnterCriticalSection(&incoming_cs);
 	// 4J Stu - If disconnected, then we shouldn't process incoming packets
 	std::vector< shared_ptr<Packet> > packetsToHandle;
-	while (!disconnected && !g_NetworkManager.IsLeavingGame() && g_NetworkManager.IsInSession() && !incoming.empty() && max-- >= 0)
+	const bool isDirectTcpConnection = (socket != NULL && socket->isTcpTransport());
+	const bool canProcessIncomingPackets = g_NetworkManager.IsInSession() || isDirectTcpConnection;
+	const bool canDispatchIncomingPackets = !g_NetworkManager.IsLeavingGame() || isDirectTcpConnection;
+	while (!disconnected && canDispatchIncomingPackets && canProcessIncomingPackets && !incoming.empty() && max-- >= 0)
 	{
 		shared_ptr<Packet> packet = incoming.front();
 		packetsToHandle.push_back(packet);

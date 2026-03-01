@@ -10,6 +10,76 @@
 #include "..\Minecraft.Client\PS3\PS3Extras\EdgeZLib.h"
 #endif //__PS3__
 
+namespace
+{
+	unsigned int ReadBigEndianU32(const void *data)
+	{
+		const unsigned char *bytes = (const unsigned char *)data;
+		return ((unsigned int)bytes[0] << 24) |
+		       ((unsigned int)bytes[1] << 16) |
+		       ((unsigned int)bytes[2] << 8)  |
+		       (unsigned int)bytes[3];
+	}
+
+	bool LooksLikeZlibStream(const void *source, unsigned int sourceSize)
+	{
+		if(source == NULL || sourceSize < 2)
+		{
+			return false;
+		}
+
+		const unsigned char *bytes = (const unsigned char *)source;
+		if((bytes[0] & 0x0f) != Z_DEFLATED)
+		{
+			return false;
+		}
+
+		const unsigned int zlibHeader = ((unsigned int)bytes[0] << 8) | (unsigned int)bytes[1];
+		return (zlibHeader % 31) == 0;
+	}
+
+	HRESULT DecompressRawDeflateWithPs3Header(void *pDestination, unsigned int *pDestSize, void *pSource, unsigned int SrcSize)
+	{
+		if(pDestination == NULL || pDestSize == NULL || pSource == NULL || SrcSize <= 4)
+		{
+			return -1;
+		}
+
+		const unsigned int expectedSize = ReadBigEndianU32(pSource);
+		if(expectedSize == 0 || expectedSize > *pDestSize)
+		{
+			return -1;
+		}
+
+		z_stream strm;
+		memset(&strm, 0, sizeof(strm));
+		strm.next_in = (Bytef *)pSource + 4;
+		strm.avail_in = SrcSize - 4;
+		strm.next_out = (Bytef *)pDestination;
+		strm.avail_out = expectedSize;
+
+		int result = inflateInit2(&strm, -15);
+		if(result != Z_OK)
+		{
+			return -1;
+		}
+
+		do
+		{
+			result = inflate(&strm, Z_NO_FLUSH);
+			if(result == Z_NEED_DICT || result == Z_DATA_ERROR || result == Z_MEM_ERROR || result == Z_STREAM_ERROR)
+			{
+				inflateEnd(&strm);
+				return -1;
+			}
+		} while(result != Z_STREAM_END);
+
+		inflateEnd(&strm);
+		*pDestSize = (unsigned int)strm.total_out;
+		return S_OK;
+	}
+}
+
 
 DWORD Compression::tlsIdx = 0;
 Compression::ThreadStorage *Compression::tlsDefault = NULL;
@@ -196,18 +266,29 @@ HRESULT Compression::DecompressLZXRLE(void *pDestination, unsigned int *pDestSiz
 	unsigned int rleSize = staticRleSize;
 	unsigned char *dynamicRleBuf = NULL;
 
-	if(*pDestSize > rleSize)
-	{
-		rleSize = *pDestSize;
-		dynamicRleBuf = new unsigned char[rleSize];
-		Decompress(dynamicRleBuf, &rleSize, pSource, SrcSize);
-		pucIn = (unsigned char *)dynamicRleBuf;
-	}
-	else
-	{
-		Decompress(rleDecompressBuf, &rleSize, pSource, SrcSize);
-		pucIn = (unsigned char *)rleDecompressBuf;
-	}
+		if(*pDestSize > rleSize)
+		{
+			rleSize = *pDestSize;
+			dynamicRleBuf = new unsigned char[rleSize];
+			HRESULT result = Decompress(dynamicRleBuf, &rleSize, pSource, SrcSize);
+			if(result != S_OK)
+			{
+				delete [] dynamicRleBuf;
+				LeaveCriticalSection(&rleDecompressLock);
+				return result;
+			}
+			pucIn = (unsigned char *)dynamicRleBuf;
+		}
+		else
+		{
+			HRESULT result = Decompress(rleDecompressBuf, &rleSize, pSource, SrcSize);
+			if(result != S_OK)
+			{
+				LeaveCriticalSection(&rleDecompressLock);
+				return result;
+			}
+			pucIn = (unsigned char *)rleDecompressBuf;
+		}
 
 	//unsigned char *pucIn = (unsigned char *)rleDecompressBuf;
 	unsigned char *pucEnd = pucIn + rleSize;
@@ -320,6 +401,10 @@ HRESULT Compression::Compress(void *pDestination, unsigned int *pDestSize, void 
 
 HRESULT Compression::Decompress(void *pDestination, unsigned int *pDestSize, void *pSource, unsigned int SrcSize)
 {
+	if(pDestination == NULL || pDestSize == NULL || pSource == NULL)
+	{
+		return -1;
+	}
 
 	if(m_decompressType != m_localDecompressType)	// check if we're decompressing data from a different platform
 	{
@@ -331,13 +416,65 @@ HRESULT Compression::Decompress(void *pDestination, unsigned int *pDestSize, voi
 #if defined __ORBIS__ || defined _DURANGO || defined _WIN64 || defined __PSVITA__
 	SIZE_T destSize = (SIZE_T)(*pDestSize);
 	int res = ::uncompress((Bytef *)pDestination, (uLongf *)&destSize, (Bytef *)pSource, SrcSize);
-	*pDestSize = (unsigned int)destSize;
-	return ( ( res == Z_OK ) ? S_OK : -1 );
+	if(res == Z_OK)
+	{
+		*pDestSize = (unsigned int)destSize;
+		return S_OK;
+	}
+
+	unsigned int rawDestSize = *pDestSize;
+	if(DecompressRawDeflateWithPs3Header(pDestination, &rawDestSize, pSource, SrcSize) == S_OK)
+	{
+		*pDestSize = rawDestSize;
+		return S_OK;
+	}
+
+	return -1;
 #elif defined __PS3__
-	uint32_t destSize = (uint32_t)(*pDestSize);
-	bool res = EdgeZLib::Decompress(pDestination, &destSize, pSource, SrcSize);
-	*pDestSize = (unsigned int)destSize;
-	return ( ( res ) ? S_OK : -1 );
+	// Direct TCP cross-platform can send either standard zlib payloads (x64/Orbis/etc)
+	// or EdgeZLib payloads (PS3 raw deflate + 4-byte uncompressed size header).
+	if(LooksLikeZlibStream(pSource, SrcSize))
+	{
+		uLongf destSize = (uLongf)(*pDestSize);
+		int zlibRes = ::uncompress((Bytef *)pDestination, &destSize, (Bytef *)pSource, SrcSize);
+		if(zlibRes == Z_OK)
+		{
+			*pDestSize = (unsigned int)destSize;
+			return S_OK;
+		}
+	}
+
+	if(SrcSize > 4)
+	{
+		const unsigned int expectedSize = ReadBigEndianU32(pSource);
+		uint32_t destSize = (uint32_t)(*pDestSize);
+		if(expectedSize > 0 && expectedSize <= destSize)
+		{
+			bool edgeRes = EdgeZLib::Decompress(pDestination, &destSize, pSource, SrcSize);
+			if(edgeRes)
+			{
+				*pDestSize = (unsigned int)destSize;
+				return S_OK;
+			}
+		}
+	}
+
+	uLongf destSize = (uLongf)(*pDestSize);
+	int zlibRes = ::uncompress((Bytef *)pDestination, &destSize, (Bytef *)pSource, SrcSize);
+	if(zlibRes == Z_OK)
+	{
+		*pDestSize = (unsigned int)destSize;
+		return S_OK;
+	}
+
+	unsigned int rawDestSize = *pDestSize;
+	if(DecompressRawDeflateWithPs3Header(pDestination, &rawDestSize, pSource, SrcSize) == S_OK)
+	{
+		*pDestSize = rawDestSize;
+		return S_OK;
+	}
+
+	return -1;
 #else
 	SIZE_T destSize = (SIZE_T)(*pDestSize);
 	HRESULT res = XMemDecompress(decompressionContext, pDestination, (SIZE_T *)&destSize, pSource, SrcSize);
@@ -542,5 +679,3 @@ void Compression::SetDecompressionType(ESavePlatform platform)
 }
 
 /*Compression gCompression;*/
-
-

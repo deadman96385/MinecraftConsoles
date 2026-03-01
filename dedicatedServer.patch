@@ -1,0 +1,5836 @@
+diff --git a/Minecraft.Client/ClientConnection.cpp b/Minecraft.Client/ClientConnection.cpp
+index 1fe60a70..b80eaed9 100644
+--- a/Minecraft.Client/ClientConnection.cpp
++++ b/Minecraft.Client/ClientConnection.cpp
+@@ -59,27 +59,37 @@
+ 
+ ClientConnection::ClientConnection(Minecraft *minecraft, const wstring& ip, int port)
+ {
++	// 4J Stu - No longer used as we use the socket version below.
++	assert(FALSE);
++#if 0
++	// 4J - added initiliasers
+ 	random = new Random();
+ 	done = false;
+-	level = NULL;
+-	started = false;
+-	savedDataStorage = new SavedDataStorage(NULL);
+-	maxPlayers = 20;
++    level = false;
++    started = false;
+ 
+-	this->minecraft = minecraft;
+-	m_userIndex = ProfileManager.GetPrimaryPad();
++    this->minecraft = minecraft;
+ 
+-	Socket *socket = new Socket(ip, port);
++	Socket *socket;
++	if( gNetworkManager.IsHost() )
++	{
++	    socket = new Socket();	// 4J - Local connection
++	}
++	else
++	{
++		socket = new Socket(ip);	// 4J - Connection over xrnm - hardcoded IP at present
++	}
+ 	createdOk = socket->createdOk;
+ 	if( createdOk )
+ 	{
+-		connection = new Connection(socket, L"Client", this);
++	    connection = new Connection(socket, L"Client", this);
+ 	}
+ 	else
+ 	{
+ 		connection = NULL;
+ 		delete socket;
+ 	}
++#endif
+ }
+ 
+ ClientConnection::ClientConnection(Minecraft *minecraft, Socket *socket, int iUserIndex /*= -1*/)
+@@ -651,11 +661,6 @@ void ClientConnection::handleAddEntity(shared_ptr<AddEntityPacket> packet)
+ 
+             e->lerpMotion(packet->xa / 8000.0, packet->ya / 8000.0, packet->za / 8000.0);	
+         }
+-
+-		if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+-		{
+-			onClientStartReady("AddEntity");
+-		}
+ 	}
+ 
+ }
+@@ -894,55 +899,6 @@ void ClientConnection::handleRemoveEntity(shared_ptr<RemoveEntitiesPacket> packe
+ 	}
+ }
+ 
+-void ClientConnection::onClientStartReady(const char *reason)
+-{
+-	if (started)
+-	{
+-		return;
+-	}
+-
+-	shared_ptr<Player> player = minecraft->localplayers[m_userIndex];
+-	if (player == NULL)
+-	{
+-		return;
+-	}
+-
+-	app.DebugPrintf("Client start transition triggered by %s (userIndex=%d)\n", reason != NULL ? reason : "unknown", m_userIndex);
+-
+-	if(!g_NetworkManager.IsHost() )
+-	{
+-		Minecraft::GetInstance()->progressRenderer->progressStagePercentage((eCCConnected * 100)/ (eCCConnected));
+-	}
+-
+-	player->xo = player->x;
+-	player->yo = player->y;
+-	player->zo = player->z;
+-	// 4J - set old position too so first frame does not interpolate from origin.
+-	player->xOld = player->x;
+-	player->yOld = player->y;
+-	player->zOld = player->z;
+-
+-	started = true;
+-	minecraft->setScreen(NULL);
+-
+-	const bool isDirectTcpConnection = (connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport());
+-	if(isDirectTcpConnection && !app.GetGameStarted())
+-	{
+-		app.DebugPrintf("Client start enabling game-started state for direct TCP path\n");
+-		app.SetGameStarted(true);
+-	}
+-
+-	// 4J-PB - can't call this when this function is called from the qnet thread (GetGameStarted will be false)
+-	if(isDirectTcpConnection)
+-	{
+-		ui.CloseUIScenes(m_userIndex, true);
+-	}
+-	else if(app.GetGameStarted())
+-	{
+-		ui.CloseUIScenes(m_userIndex);
+-	}
+-}
+-
+ void ClientConnection::handleMovePlayer(shared_ptr<MovePlayerPacket> packet)
+ {
+     shared_ptr<Player> player = minecraft->localplayers[m_userIndex]; //minecraft->player;
+@@ -973,7 +929,32 @@ void ClientConnection::handleMovePlayer(shared_ptr<MovePlayerPacket> packet)
+     packet->z = player->z;
+     packet->yView = player->y;
+     connection->send(packet);
+-	onClientStartReady("MovePlayer");
++    if (!started)
++	{		
++
++		if(!g_NetworkManager.IsHost() )
++		{
++			Minecraft::GetInstance()->progressRenderer->progressStagePercentage((eCCConnected * 100)/ (eCCConnected));
++		}
++        player->xo = player->x;
++        player->yo = player->y;
++        player->zo = player->z;
++		// 4J - added setting xOld/yOld/zOld here too, as otherwise at the start of the game we interpolate the player position from the origin to wherever its first position really is
++		player->xOld = player->x;
++		player->yOld = player->y;
++		player->zOld = player->z;
++
++        started = true;
++        minecraft->setScreen(NULL);
++		
++		// Fix for #105852 - TU12: Content: Gameplay: Local splitscreen Players are spawned at incorrect places after re-joining previously saved and loaded "Mass Effect World".
++		// Move this check from Minecraft::createExtraLocalPlayer
++		// 4J-PB - can't call this when this function is called from the qnet thread (GetGameStarted will be false)
++		if(app.GetGameStarted())
++		{
++			ui.CloseUIScenes(m_userIndex);
++		}
++    }
+ 
+ }
+ 
+@@ -983,20 +964,11 @@ void ClientConnection::handleChunkVisibilityArea(shared_ptr<ChunkVisibilityAreaP
+ 	for(int z = packet->m_minZ; z <= packet->m_maxZ; ++z)
+ 		for(int x = packet->m_minX; x <= packet->m_maxX; ++x)
+ 			level->setChunkVisible(x, z, true);
+-
+-	if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+-	{
+-		onClientStartReady("ChunkVisibilityArea");
+-	}
+ }
+ 
+ void ClientConnection::handleChunkVisibility(shared_ptr<ChunkVisibilityPacket> packet)
+ {
+ 	level->setChunkVisible(packet->x, packet->z, packet->visible);
+-	if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+-	{
+-		onClientStartReady("ChunkVisibility");
+-	}
+ }
+ 
+ void ClientConnection::handleChunkTilesUpdate(shared_ptr<ChunkTilesUpdatePacket> packet)
+@@ -1065,10 +1037,6 @@ void ClientConnection::handleChunkTilesUpdate(shared_ptr<ChunkTilesUpdatePacket>
+ 		PIXEndNamedEvent();
+ 
+ 		PIXEndNamedEvent();
+-		if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+-		{
+-			onClientStartReady("ChunkTilesUpdate");
+-		}
+ 	}
+ }
+ 
+@@ -1104,10 +1072,6 @@ void ClientConnection::handleBlockRegionUpdate(shared_ptr<BlockRegionUpdatePacke
+ 			dimensionLevel->dataReceivedForChunk( packet->x >> 4, packet->z >> 4 );
+ 		}
+ 		PIXEndNamedEvent();
+-		if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+-		{
+-			onClientStartReady("BlockRegionUpdate");
+-		}
+ 	}
+ }
+ 
+@@ -1644,7 +1608,6 @@ void ClientConnection::handleEntityActionAtPosition(shared_ptr<EntityActionAtPos
+ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
+ {
+ //	printf("Client: handlePreLogin\n");
+-	app.DebugPrintf("Client received PreLogin: netVersion=%d players=%d hostIndex=%d settings=0x%08x texturePack=%u\n", packet->m_netcodeVersion, packet->m_dwPlayerCount, packet->m_hostIndex, packet->m_serverSettings, packet->m_texturePackId);
+ #if 1
+ 	// 4J - Check that we can play with all the players already in the game who have Friends-Only UGC set
+ 	BOOL canPlay = TRUE;
+@@ -1652,12 +1615,6 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
+ 	BOOL isAtLeastOneFriend = g_NetworkManager.IsHost();
+ 	BOOL isFriendsWithHost = TRUE;
+ 	BOOL cantPlayContentRestricted = FALSE;
+-	const bool isDirectTcpConnection = (connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport());
+-	const bool hasHostPlayerUid = (packet->m_playerXuids != NULL && packet->m_dwPlayerCount > 0 && packet->m_hostIndex < packet->m_dwPlayerCount);
+-	if(isDirectTcpConnection)
+-	{
+-		app.DebugPrintf("Client PreLogin using direct TCP path; skipping platform session privilege checks\n");
+-	}
+ 	
+ 	if(!g_NetworkManager.IsHost())
+ 	{
+@@ -1823,8 +1780,6 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
+ 	cantPlayContentRestricted= FALSE;
+ 
+ #if ( defined __PS3__ || defined __ORBIS__ || defined __PSVITA__)
+-	if(!isDirectTcpConnection)
+-	{
+ 
+ 	if(!g_NetworkManager.IsHost() && !app.GetGameHostOption(eGameHostOption_FriendsOfFriends))
+ 	{
+@@ -1891,13 +1846,7 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
+ #endif
+ 					if( ret == 0 )
+ 					{
+-						if(!hasHostPlayerUid)
+-						{
+-							app.DebugPrintf("Client PreLogin missing host UID in packet; skipping friend check\n");
+-							isFriend = true;
+-							break;
+-						}
+-						else if(strcmp(npid.handle.data, packet->m_playerXuids[packet->m_hostIndex].getOnlineID()) == 0)
++						if(strcmp(npid.handle.data, packet->m_playerXuids[packet->m_hostIndex].getOnlineID()) == 0)
+ 						{
+ 							isFriend = true;
+ 							break;
+@@ -1939,7 +1888,6 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
+ 
+ 		cantPlayContentRestricted = bContentRestricted ? 1 : 0;
+ 	}
+-	}
+ 
+ 
+ #endif
+@@ -2101,7 +2049,6 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
+ 		}
+ 		BOOL allAllowed, friendsAllowed;
+ 		ProfileManager.AllowedPlayerCreatedContent(m_userIndex,true,&allAllowed,&friendsAllowed);
+-		app.DebugPrintf("Client sending Login packet: user='%ls' userIndex=%d\n", minecraft->user->name.c_str(), m_userIndex);
+ 		send( shared_ptr<LoginPacket>( new LoginPacket(minecraft->user->name, SharedConstants::NETWORK_PROTOCOL_VERSION, offlineXUID, onlineXUID, (allAllowed!=TRUE && friendsAllowed==TRUE), 
+ 			packet->m_ugcPlayersVersion, app.GetPlayerSkinId(m_userIndex), app.GetPlayerCapeId(m_userIndex), ProfileManager.IsGuest( m_userIndex ))));
+ 
+@@ -2194,11 +2141,6 @@ void ClientConnection::handleAddMob(shared_ptr<AddMobPacket> packet)
+ 		shared_ptr<Slime> slime = dynamic_pointer_cast<Slime>(mob);
+ 		slime->setSize( slime->getSize() );
+ 	}
+-
+-	if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+-	{
+-		onClientStartReady("AddMob");
+-	}
+ }
+ 
+ void ClientConnection::handleSetTime(shared_ptr<SetTimePacket> packet)
+diff --git a/Minecraft.Client/ClientConnection.h b/Minecraft.Client/ClientConnection.h
+index 5aa7972b..2ce46ce0 100644
+--- a/Minecraft.Client/ClientConnection.h
++++ b/Minecraft.Client/ClientConnection.h
+@@ -90,7 +90,6 @@ public:
+     virtual void handleEntityEvent(shared_ptr<EntityEventPacket> packet);
+ private:
+ 	shared_ptr<Entity> getEntity(int entityId);
+-	void onClientStartReady(const char *reason);
+ 	wstring GetDisplayNameByGamertag(wstring gamertag);
+ public:
+     virtual void handleSetHealth(shared_ptr<SetHealthPacket> packet);
+@@ -138,4 +137,4 @@ public:
+ 	virtual void handleXZ(shared_ptr<XZPacket> packet);
+ 
+ 	void displayPrivilegeChanges(shared_ptr<MultiplayerLocalPlayer> player, unsigned int oldPrivileges);
+-};
++};
+\ No newline at end of file
+diff --git a/Minecraft.Client/Common/Consoles_App.cpp b/Minecraft.Client/Common/Consoles_App.cpp
+index 73e1beba..12aecb3d 100644
+--- a/Minecraft.Client/Common/Consoles_App.cpp
++++ b/Minecraft.Client/Common/Consoles_App.cpp
+@@ -3217,7 +3217,7 @@ void CMinecraftApp::HandleXuiActions(void)
+ 								bool gameStarted = false;
+ 								for(int i = 0; i < pMinecraft->levels.length; i++)
+ 								{
+-									if (pMinecraft->levels.data[i] != NULL)
++									if (pMinecraft->levels.data[i] != nullptr)
+ 									{
+ 										gameStarted = true;
+ 										break;
+@@ -9532,4 +9532,4 @@ bool CMinecraftApp::HasReachedMainMenu()
+ {
+ 	return m_hasReachedMainMenu;
+ }
+-#endif
++#endif
+\ No newline at end of file
+diff --git a/Minecraft.Client/Common/Network/GameNetworkManager.cpp b/Minecraft.Client/Common/Network/GameNetworkManager.cpp
+index e4f048c1..2a80f80a 100644
+--- a/Minecraft.Client/Common/Network/GameNetworkManager.cpp
++++ b/Minecraft.Client/Common/Network/GameNetworkManager.cpp
+@@ -375,23 +375,15 @@ bool	CGameNetworkManager::StartNetworkGame(Minecraft *minecraft, LPVOID lpParame
+ 			// Already have setup the primary pad
+ 			if(idx == ProfileManager.GetPrimaryPad() ) continue;
+ 
+-				if( GetLocalPlayerByUserIndex(idx) != NULL && !ProfileManager.IsSignedIn(idx) )
+-				{
+-					INetworkPlayer *pNetworkPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(idx);
+-					if(pNetworkPlayer == NULL)
+-					{
+-						continue;
+-					}
+-					Socket *socket = pNetworkPlayer->GetSocket();
+-					app.DebugPrintf("Closing socket due to player %d not being signed in any more\n", idx);
+-					if(socket != NULL)
+-					{
+-						if( !socket->close(false) ) socket->close(true);
+-						pNetworkPlayer->SetSocket(NULL);
+-					}
++			if( GetLocalPlayerByUserIndex(idx) != NULL && !ProfileManager.IsSignedIn(idx) )
++			{
++				INetworkPlayer *pNetworkPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(idx);
++				Socket *socket = pNetworkPlayer->GetSocket();
++				app.DebugPrintf("Closing socket due to player %d not being signed in any more\n");
++				if( !socket->close(false) ) socket->close(true);
+ 
+-					continue;
+-				}
++				continue;
++			}
+ 
+ 			// By default when we host we only have the local player, but currently allow multiple local players to join
+ 			// when joining any other way, so just because they are signed in doesn't mean they are in the session
+@@ -1414,40 +1406,8 @@ void CGameNetworkManager::CreateSocket( INetworkPlayer *pNetworkPlayer, bool loc
+ 	}
+ 	else
+ 	{
+-		// On Windows direct-connect sessions, each extra local player needs its own TCP socket to the remote host.
+-		// The QNet path only provides local queueing and cannot carry traffic to a direct TCP server.
+-		if(localPlayer && !g_NetworkManager.IsHost())
+-		{
+-			INetworkPlayer *hostPlayer = g_NetworkManager.GetHostPlayer();
+-			Socket *hostSocket = hostPlayer != NULL ? hostPlayer->GetSocket() : NULL;
+-			wstring hostAddress;
+-			int hostPort = 0;
+-			if(hostSocket != NULL && hostSocket->isTcpTransport() && Socket::GetLastDirectConnectEndpoint(&hostAddress, &hostPort))
+-			{
+-				Socket *directSocket = new Socket(hostAddress, hostPort);
+-				if(directSocket != NULL && directSocket->createdOk)
+-				{
+-					socket = directSocket;
+-					app.DebugPrintf("Created direct socket for local player %d via %ls:%d\n", pNetworkPlayer->GetUserIndex(), hostAddress.c_str(), hostPort);
+-				}
+-				else
+-				{
+-					app.DebugPrintf("Failed direct socket for local player %d via %ls:%d, falling back to session socket\n", pNetworkPlayer->GetUserIndex(), hostAddress.c_str(), hostPort);
+-					delete directSocket;
+-				}
+-			}
+-		}
+-
+-		if(socket == NULL)
+-		{
+-			socket = new Socket( pNetworkPlayer, g_NetworkManager.IsHost(), g_NetworkManager.IsHost() && localPlayer );
+-		}
+-
++		socket = new Socket( pNetworkPlayer, g_NetworkManager.IsHost(), g_NetworkManager.IsHost() && localPlayer );
+ 		pNetworkPlayer->SetSocket( socket );
+-		if(socket != NULL)
+-		{
+-			socket->setPlayer(pNetworkPlayer);
+-		}
+ 
+ 		// 4J Stu - May be other states we want to accept aswell
+ 		// Add this user to the game server if the game is started already
+diff --git a/Minecraft.Client/Common/Network/PlatformNetworkManagerStub.cpp b/Minecraft.Client/Common/Network/PlatformNetworkManagerStub.cpp
+index ce763534..b6b0fe12 100644
+--- a/Minecraft.Client/Common/Network/PlatformNetworkManagerStub.cpp
++++ b/Minecraft.Client/Common/Network/PlatformNetworkManagerStub.cpp
+@@ -6,38 +6,6 @@
+ 
+ CPlatformNetworkManagerStub *g_pPlatformNetworkManager;
+ 
+-namespace
+-{
+-void AppendUniquePlayer(std::vector<INetworkPlayer *> &players, INetworkPlayer *player)
+-{
+-	if(player == NULL)
+-	{
+-		return;
+-	}
+-
+-	for(std::vector<INetworkPlayer *>::iterator it = players.begin(); it != players.end(); ++it)
+-	{
+-		if(*it == player)
+-		{
+-			return;
+-		}
+-
+-		if((*it)->GetSmallId() == player->GetSmallId() &&
+-		   (*it)->IsHost() == player->IsHost() &&
+-		   (*it)->IsLocal() == player->IsLocal())
+-		{
+-			return;
+-		}
+-	}
+-
+-	players.push_back(player);
+-}
+-}
+-
+-CPlatformNetworkManagerStub::CPlatformNetworkManagerStub()
+-	: m_pIQNet(NULL)
+-{
+-}
+ 
+ void CPlatformNetworkManagerStub::NotifyPlayerJoined(IQNetPlayer *pQNetPlayer	)
+ {
+@@ -151,15 +119,6 @@ bool CPlatformNetworkManagerStub::Initialise(CGameNetworkManager *pGameNetworkMa
+ 	m_pGameNetworkManager = pGameNetworkManager;
+ 	m_flagIndexSize = flagIndexSize;
+ 	g_pPlatformNetworkManager = this;
+-
+-	if (m_pIQNet != NULL)
+-	{
+-		delete m_pIQNet;
+-		m_pIQNet = NULL;
+-	}
+-	m_pIQNet = new IQNet();
+-	m_pIQNet->EndGame();
+-
+ 	for( int i = 0; i < XUSER_MAX_COUNT; i++ )
+ 	{
+ 		playerChangedCallback[ i ] = NULL;
+@@ -195,8 +154,6 @@ bool CPlatformNetworkManagerStub::Initialise(CGameNetworkManager *pGameNetworkMa
+ 
+ void CPlatformNetworkManagerStub::Terminate()
+ {
+-	delete m_pIQNet;
+-	m_pIQNet = NULL;
+ }
+ 
+ int CPlatformNetworkManagerStub::GetJoiningReadyPercentage()
+@@ -221,27 +178,7 @@ void CPlatformNetworkManagerStub::DoWork()
+ 
+ int CPlatformNetworkManagerStub::GetPlayerCount()
+ {
+-	std::vector<INetworkPlayer *> players;
+-
+-	const int qnetCount = m_pIQNet->GetPlayerCount();
+-	for(int i = 0; i < qnetCount; ++i)
+-	{
+-		IQNetPlayer *qnetPlayer = m_pIQNet->GetPlayerByIndex(i);
+-		INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+-		if(player == NULL && qnetPlayer != NULL)
+-		{
+-			player = addNetworkPlayer(qnetPlayer);
+-		}
+-		AppendUniquePlayer(players, player);
+-	}
+-
+-	const int directCount = Socket::GetDirectPlayerCount();
+-	for(int i = 0; i < directCount; ++i)
+-	{
+-		AppendUniquePlayer(players, Socket::GetDirectPlayerByIndex(i));
+-	}
+-
+-	return (int)players.size();
++	return m_pIQNet->GetPlayerCount();
+ }
+ 
+ bool CPlatformNetworkManagerStub::ShouldMessageForFullSession()
+@@ -251,7 +188,7 @@ bool CPlatformNetworkManagerStub::ShouldMessageForFullSession()
+ 
+ int CPlatformNetworkManagerStub::GetOnlinePlayerCount()
+ {
+-	return GetPlayerCount();
++	return 1;
+ }
+ 
+ int CPlatformNetworkManagerStub::GetLocalPlayerMask(int playerIndex)
+@@ -261,14 +198,8 @@ int CPlatformNetworkManagerStub::GetLocalPlayerMask(int playerIndex)
+ 
+ bool CPlatformNetworkManagerStub::AddLocalPlayerByUserIndex( int userIndex )
+ {
+-	const HRESULT result = m_pIQNet->AddLocalPlayerByUserIndex(userIndex);
+-	if(result != S_OK)
+-	{
+-		return false;
+-	}
+-
+ 	NotifyPlayerJoined(m_pIQNet->GetLocalPlayerByUserIndex(userIndex));
+-	return true;
++	return ( m_pIQNet->AddLocalPlayerByUserIndex(userIndex) == S_OK );
+ }
+ 
+ bool CPlatformNetworkManagerStub::RemoveLocalPlayerByUserIndex( int userIndex )
+@@ -473,77 +404,9 @@ CPlatformNetworkManagerStub::PlayerFlags::~PlayerFlags()
+ // Add a player to the per system flag storage - if we've already got a player from that system, copy its flags over
+ void CPlatformNetworkManagerStub::SystemFlagAddPlayer(INetworkPlayer *pNetworkPlayer)
+ {
+-	if( pNetworkPlayer == NULL )
+-	{
+-		return;
+-	}
+-
+-	// Remove stale entries before copying per-system chunk flags. Without this,
+-	// a reconnect can inherit fully-set flags from a disconnected player on the
+-	// same machine, which prevents chunks from being re-sent.
+-	std::vector<INetworkPlayer *> activePlayers;
+-	const int activeCount = GetPlayerCount();
+-	for( int i = 0; i < activeCount; ++i )
+-	{
+-		INetworkPlayer *activePlayer = GetPlayerByIndex(i);
+-		if( activePlayer != NULL )
+-		{
+-			activePlayers.push_back(activePlayer);
+-		}
+-	}
+-
+-	for( unsigned int i = 0; i < m_playerFlags.size(); )
+-	{
+-		bool stillActive = false;
+-		for( unsigned int j = 0; j < activePlayers.size(); ++j )
+-		{
+-			if( m_playerFlags[i]->m_pNetworkPlayer == activePlayers[j] )
+-			{
+-				stillActive = true;
+-				break;
+-			}
+-		}
+-
+-		if( !stillActive )
+-		{
+-			delete m_playerFlags[i];
+-			m_playerFlags[i] = m_playerFlags.back();
+-			m_playerFlags.pop_back();
+-			continue;
+-		}
+-
+-		++i;
+-	}
+-
+-	for( unsigned int i = 0; i < m_playerFlags.size(); ++i )
+-	{
+-		if( m_playerFlags[i]->m_pNetworkPlayer == pNetworkPlayer )
+-		{
+-			return;
+-		}
+-	}
+-
+ 	PlayerFlags *newPlayerFlags = new PlayerFlags( pNetworkPlayer,  m_flagIndexSize);
+-
+-	// If a same-system player with the same UID is still present, treat this as
+-	// a reconnect and do not inherit chunk-sent flags. Otherwise a rejoin can be
+-	// considered "fully synced" and only the spawn chunk appears.
+-	bool copyFlagsFromSystem = true;
+-	PlayerUID newUid = pNetworkPlayer->GetUID();
+-	for( unsigned int i = 0; i < m_playerFlags.size(); ++i )
+-	{
+-		INetworkPlayer *existingPlayer = m_playerFlags[i]->m_pNetworkPlayer;
+-		if( existingPlayer != NULL &&
+-			pNetworkPlayer->IsSameSystem(existingPlayer) &&
+-			ProfileManager.AreXUIDSEqual(existingPlayer->GetUID(), newUid) )
+-		{
+-			copyFlagsFromSystem = false;
+-			break;
+-		}
+-	}
+-
+ 	// If any of our existing players are on the same system, then copy over flags from that one
+-	for( unsigned int i = 0; copyFlagsFromSystem && i < m_playerFlags.size(); i++ )
++	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+ 	{
+ 		if( pNetworkPlayer->IsSameSystem(m_playerFlags[i]->m_pNetworkPlayer) )
+ 		{
+@@ -584,57 +447,6 @@ void CPlatformNetworkManagerStub::SystemFlagSet(INetworkPlayer *pNetworkPlayer,
+ 	if( ( index < 0 ) || ( index >= m_flagIndexSize ) ) return;
+ 	if( pNetworkPlayer == NULL ) return;
+ 
+-	// Drop stale records before using IsSameSystem() against tracked players.
+-	std::vector<INetworkPlayer *> activePlayers;
+-	const int activeCount = GetPlayerCount();
+-	for( int i = 0; i < activeCount; ++i )
+-	{
+-		INetworkPlayer *activePlayer = GetPlayerByIndex(i);
+-		if( activePlayer != NULL )
+-		{
+-			activePlayers.push_back(activePlayer);
+-		}
+-	}
+-
+-	for( unsigned int i = 0; i < m_playerFlags.size(); )
+-	{
+-		bool stillActive = false;
+-		for( unsigned int j = 0; j < activePlayers.size(); ++j )
+-		{
+-			if( m_playerFlags[i]->m_pNetworkPlayer == activePlayers[j] )
+-			{
+-				stillActive = true;
+-				break;
+-			}
+-		}
+-
+-		if( !stillActive )
+-		{
+-			delete m_playerFlags[i];
+-			m_playerFlags[i] = m_playerFlags.back();
+-			m_playerFlags.pop_back();
+-			continue;
+-		}
+-
+-		++i;
+-	}
+-
+-	// Direct TCP players are not announced through IQNet join callbacks, so they may not
+-	// have a flag record yet. Ensure one exists before attempting to set any flags.
+-	bool hasEntry = false;
+-	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+-	{
+-		if( m_playerFlags[i]->m_pNetworkPlayer == pNetworkPlayer )
+-		{
+-			hasEntry = true;
+-			break;
+-		}
+-	}
+-	if( !hasEntry )
+-	{
+-		SystemFlagAddPlayer(pNetworkPlayer);
+-	}
+-
+ 	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+ 	{
+ 		if( pNetworkPlayer->IsSameSystem(m_playerFlags[i]->m_pNetworkPlayer) )
+@@ -677,16 +489,7 @@ wstring CPlatformNetworkManagerStub::GatherRTTStats()
+ 
+ 	for(unsigned int i = 0; i < GetPlayerCount(); ++i)
+ 	{
+-		INetworkPlayer *networkPlayer = GetPlayerByIndex(i);
+-		if(networkPlayer == NULL)
+-		{
+-			continue;
+-		}
+-		IQNetPlayer *pQNetPlayer = m_pIQNet->GetPlayerBySmallId(networkPlayer->GetSmallId());
+-		if(pQNetPlayer == NULL)
+-		{
+-			continue;
+-		}
++		IQNetPlayer *pQNetPlayer = ((NetworkPlayerXbox *)GetPlayerByIndex( i ))->GetQNetPlayer();
+ 
+ 		if(!pQNetPlayer->IsLocal())
+ 		{
+@@ -780,105 +583,27 @@ INetworkPlayer *CPlatformNetworkManagerStub::getNetworkPlayer(IQNetPlayer *pQNet
+ 
+ INetworkPlayer *CPlatformNetworkManagerStub::GetLocalPlayerByUserIndex(int userIndex )
+ {
+-	IQNetPlayer *qnetPlayer = m_pIQNet->GetLocalPlayerByUserIndex(userIndex);
+-	INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+-	if(player == NULL && qnetPlayer != NULL)
+-	{
+-		player = addNetworkPlayer(qnetPlayer);
+-	}
+-	return player;
++	return getNetworkPlayer(m_pIQNet->GetLocalPlayerByUserIndex(userIndex)); 
+ }
+ 
+ INetworkPlayer *CPlatformNetworkManagerStub::GetPlayerByIndex(int playerIndex)
+ {
+-	std::vector<INetworkPlayer *> players;
+-
+-	const int qnetCount = m_pIQNet->GetPlayerCount();
+-	for(int i = 0; i < qnetCount; ++i)
+-	{
+-		IQNetPlayer *qnetPlayer = m_pIQNet->GetPlayerByIndex(i);
+-		INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+-		if(player == NULL && qnetPlayer != NULL)
+-		{
+-			player = addNetworkPlayer(qnetPlayer);
+-		}
+-		AppendUniquePlayer(players, player);
+-	}
+-
+-	const int directCount = Socket::GetDirectPlayerCount();
+-	for(int i = 0; i < directCount; ++i)
+-	{
+-		AppendUniquePlayer(players, Socket::GetDirectPlayerByIndex(i));
+-	}
+-
+-	if(playerIndex < 0 || playerIndex >= (int)players.size())
+-	{
+-		return NULL;
+-	}
+-
+-	return players[playerIndex];
++	return getNetworkPlayer(m_pIQNet->GetPlayerByIndex(playerIndex));
+ }
+ 
+ INetworkPlayer * CPlatformNetworkManagerStub::GetPlayerByXuid(PlayerUID xuid)
+ {
+-	IQNetPlayer *qnetPlayer = m_pIQNet->GetPlayerByXuid(xuid);
+-	INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+-	if(player == NULL && qnetPlayer != NULL)
+-	{
+-		player = addNetworkPlayer(qnetPlayer);
+-	}
+-	if(player != NULL)
+-	{
+-		return player;
+-	}
+-
+-	const int directCount = Socket::GetDirectPlayerCount();
+-	for(int i = 0; i < directCount; ++i)
+-	{
+-		INetworkPlayer *directPlayer = Socket::GetDirectPlayerByIndex(i);
+-		if(directPlayer != NULL && ProfileManager.AreXUIDSEqual(directPlayer->GetUID(), xuid))
+-		{
+-			return directPlayer;
+-		}
+-	}
+-	return NULL;
++	return getNetworkPlayer( m_pIQNet->GetPlayerByXuid(xuid)) ;
+ }
+ 
+ INetworkPlayer * CPlatformNetworkManagerStub::GetPlayerBySmallId(unsigned char smallId)
+ {
+-	IQNetPlayer *qnetPlayer = m_pIQNet->GetPlayerBySmallId(smallId);
+-	INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+-	if(player == NULL && qnetPlayer != NULL)
+-	{
+-		player = addNetworkPlayer(qnetPlayer);
+-	}
+-	if(player != NULL && player->GetSmallId() == smallId)
+-	{
+-		return player;
+-	}
+-
+-	return Socket::GetDirectPlayerBySmallId(smallId);
++	return getNetworkPlayer(m_pIQNet->GetPlayerBySmallId(smallId));
+ }
+ 
+ INetworkPlayer *CPlatformNetworkManagerStub::GetHostPlayer()
+ {
+-	const int directCount = Socket::GetDirectPlayerCount();
+-	for(int i = 0; i < directCount; ++i)
+-	{
+-		INetworkPlayer *directPlayer = Socket::GetDirectPlayerByIndex(i);
+-		if(directPlayer != NULL && directPlayer->IsHost())
+-		{
+-			return directPlayer;
+-		}
+-	}
+-
+-	IQNetPlayer *qnetPlayer = m_pIQNet->GetHostPlayer();
+-	INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+-	if(player == NULL && qnetPlayer != NULL)
+-	{
+-		player = addNetworkPlayer(qnetPlayer);
+-	}
+-	return player;
++	return getNetworkPlayer(m_pIQNet->GetHostPlayer());
+ }
+ 
+ bool CPlatformNetworkManagerStub::IsHost()
+diff --git a/Minecraft.Client/Common/Network/PlatformNetworkManagerStub.h b/Minecraft.Client/Common/Network/PlatformNetworkManagerStub.h
+index 3908200c..f997dece 100644
+--- a/Minecraft.Client/Common/Network/PlatformNetworkManagerStub.h
++++ b/Minecraft.Client/Common/Network/PlatformNetworkManagerStub.h
+@@ -10,8 +10,6 @@ class CPlatformNetworkManagerStub : public CPlatformNetworkManager
+ {
+ 	friend class CGameNetworkManager;
+ public:
+-	CPlatformNetworkManagerStub();
+-
+ 	virtual bool Initialise(CGameNetworkManager *pGameNetworkManager, int flagIndexSize);
+ 	virtual void Terminate();
+ 	virtual int GetJoiningReadyPercentage();
+diff --git a/Minecraft.Client/Common/Network/Sony/NetworkPlayerSony.cpp b/Minecraft.Client/Common/Network/Sony/NetworkPlayerSony.cpp
+index 63047bc3..9c750e95 100644
+--- a/Minecraft.Client/Common/Network/Sony/NetworkPlayerSony.cpp
++++ b/Minecraft.Client/Common/Network/Sony/NetworkPlayerSony.cpp
+@@ -15,22 +15,12 @@ unsigned char NetworkPlayerSony::GetSmallId()
+ void NetworkPlayerSony::SendData(INetworkPlayer *player, const void *pvData, int dataSize, bool lowPriority)
+ {
+ 	// TODO - handle priority
+-	NetworkPlayerSony *networkPlayer = dynamic_cast<NetworkPlayerSony *>(player);
+-	if(networkPlayer == NULL)
+-	{
+-		return;
+-	}
+-	m_sqrPlayer->SendData(networkPlayer->m_sqrPlayer, pvData, dataSize);
++	m_sqrPlayer->SendData( ((NetworkPlayerSony *)player)->m_sqrPlayer, pvData, dataSize );
+ }
+ 
+ bool NetworkPlayerSony::IsSameSystem(INetworkPlayer *player)
+ {
+-	NetworkPlayerSony *networkPlayer = dynamic_cast<NetworkPlayerSony *>(player);
+-	if(networkPlayer == NULL)
+-	{
+-		return false;
+-	}
+-	return m_sqrPlayer->IsSameSystem(networkPlayer->m_sqrPlayer);
++	return m_sqrPlayer->IsSameSystem(((NetworkPlayerSony *)player)->m_sqrPlayer);
+ }
+ 
+ int NetworkPlayerSony::GetSendQueueSizeBytes( INetworkPlayer *player, bool lowPriority )
+diff --git a/Minecraft.Client/Common/Network/Sony/PlatformNetworkManagerSony.cpp b/Minecraft.Client/Common/Network/Sony/PlatformNetworkManagerSony.cpp
+index e640ab43..009993cb 100644
+--- a/Minecraft.Client/Common/Network/Sony/PlatformNetworkManagerSony.cpp
++++ b/Minecraft.Client/Common/Network/Sony/PlatformNetworkManagerSony.cpp
+@@ -7,34 +7,6 @@
+ 
+ CPlatformNetworkManagerSony *g_pPlatformNetworkManager;
+ 
+-namespace
+-{
+-void AppendUniquePlayer(std::vector<INetworkPlayer *> &players, INetworkPlayer *player)
+-{
+-	if(player == NULL)
+-	{
+-		return;
+-	}
+-
+-	for(std::vector<INetworkPlayer *>::iterator it = players.begin(); it != players.end(); ++it)
+-	{
+-		if(*it == player)
+-		{
+-			return;
+-		}
+-
+-		if((*it)->GetSmallId() == player->GetSmallId() &&
+-		   (*it)->IsHost() == player->IsHost() &&
+-		   (*it)->IsLocal() == player->IsLocal())
+-		{
+-			return;
+-		}
+-	}
+-
+-	players.push_back(player);
+-}
+-}
+-
+ bool CPlatformNetworkManagerSony::IsLocalGame() 
+ { 
+ 	return m_bIsOfflineGame; 
+@@ -625,27 +597,7 @@ void CPlatformNetworkManagerSony::DoWork()
+ 
+ int CPlatformNetworkManagerSony::GetPlayerCount()
+ {
+-	std::vector<INetworkPlayer *> players;
+-
+-	const int sqrCount = m_pSQRNet->GetPlayerCount();
+-	for(int i = 0; i < sqrCount; ++i)
+-	{
+-		SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetPlayerByIndex(i);
+-		INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+-		if(player == NULL && sqrPlayer != NULL)
+-		{
+-			player = addNetworkPlayer(sqrPlayer);
+-		}
+-		AppendUniquePlayer(players, player);
+-	}
+-
+-	const int directCount = Socket::GetDirectPlayerCount();
+-	for(int i = 0; i < directCount; ++i)
+-	{
+-		AppendUniquePlayer(players, Socket::GetDirectPlayerByIndex(i));
+-	}
+-
+-	return (int)players.size();
++	return m_pSQRNet->GetPlayerCount();
+ }
+ 
+ bool CPlatformNetworkManagerSony::ShouldMessageForFullSession()
+@@ -655,7 +607,7 @@ bool CPlatformNetworkManagerSony::ShouldMessageForFullSession()
+ 
+ int CPlatformNetworkManagerSony::GetOnlinePlayerCount()
+ {
+-	return GetPlayerCount();
++	return m_pSQRNet->GetOnlinePlayerCount();
+ }
+ 
+ int CPlatformNetworkManagerSony::GetLocalPlayerMask(int playerIndex)
+@@ -1040,77 +992,9 @@ CPlatformNetworkManagerSony::PlayerFlags::~PlayerFlags()
+ // Add a player to the per system flag storage - if we've already got a player from that system, copy its flags over
+ void CPlatformNetworkManagerSony::SystemFlagAddPlayer(INetworkPlayer *pNetworkPlayer)
+ {
+-	if( pNetworkPlayer == NULL )
+-	{
+-		return;
+-	}
+-
+-	// Remove stale entries before copying per-system chunk flags. Without this,
+-	// a reconnect can inherit fully-set flags from a disconnected player on the
+-	// same machine, which prevents chunks from being re-sent.
+-	std::vector<INetworkPlayer *> activePlayers;
+-	const int activeCount = GetPlayerCount();
+-	for( int i = 0; i < activeCount; ++i )
+-	{
+-		INetworkPlayer *activePlayer = GetPlayerByIndex(i);
+-		if( activePlayer != NULL )
+-		{
+-			activePlayers.push_back(activePlayer);
+-		}
+-	}
+-
+-	for( unsigned int i = 0; i < m_playerFlags.size(); )
+-	{
+-		bool stillActive = false;
+-		for( unsigned int j = 0; j < activePlayers.size(); ++j )
+-		{
+-			if( m_playerFlags[i]->m_pNetworkPlayer == activePlayers[j] )
+-			{
+-				stillActive = true;
+-				break;
+-			}
+-		}
+-
+-		if( !stillActive )
+-		{
+-			delete m_playerFlags[i];
+-			m_playerFlags[i] = m_playerFlags.back();
+-			m_playerFlags.pop_back();
+-			continue;
+-		}
+-
+-		++i;
+-	}
+-
+-	for( unsigned int i = 0; i < m_playerFlags.size(); ++i )
+-	{
+-		if( m_playerFlags[i]->m_pNetworkPlayer == pNetworkPlayer )
+-		{
+-			return;
+-		}
+-	}
+-
+ 	PlayerFlags *newPlayerFlags = new PlayerFlags( pNetworkPlayer,  m_flagIndexSize);
+-
+-	// If a same-system player with the same UID is still present, treat this as
+-	// a reconnect and do not inherit chunk-sent flags. Otherwise a rejoin can be
+-	// considered "fully synced" and only the spawn chunk appears.
+-	bool copyFlagsFromSystem = true;
+-	PlayerUID newUid = pNetworkPlayer->GetUID();
+-	for( unsigned int i = 0; i < m_playerFlags.size(); ++i )
+-	{
+-		INetworkPlayer *existingPlayer = m_playerFlags[i]->m_pNetworkPlayer;
+-		if( existingPlayer != NULL &&
+-			pNetworkPlayer->IsSameSystem(existingPlayer) &&
+-			ProfileManager.AreXUIDSEqual(existingPlayer->GetUID(), newUid) )
+-		{
+-			copyFlagsFromSystem = false;
+-			break;
+-		}
+-	}
+-
+ 	// If any of our existing players are on the same system, then copy over flags from that one
+-	for( unsigned int i = 0; copyFlagsFromSystem && i < m_playerFlags.size(); i++ )
++	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+ 	{
+ 		if( pNetworkPlayer->IsSameSystem(m_playerFlags[i]->m_pNetworkPlayer) )
+ 		{
+@@ -1151,56 +1035,6 @@ void CPlatformNetworkManagerSony::SystemFlagSet(INetworkPlayer *pNetworkPlayer,
+ 	if( ( index < 0 ) || ( index >= m_flagIndexSize ) ) return;
+ 	if( pNetworkPlayer == NULL ) return;
+ 
+-	// Drop stale records before using IsSameSystem() against tracked players.
+-	std::vector<INetworkPlayer *> activePlayers;
+-	const int activeCount = GetPlayerCount();
+-	for( int i = 0; i < activeCount; ++i )
+-	{
+-		INetworkPlayer *activePlayer = GetPlayerByIndex(i);
+-		if( activePlayer != NULL )
+-		{
+-			activePlayers.push_back(activePlayer);
+-		}
+-	}
+-
+-	for( unsigned int i = 0; i < m_playerFlags.size(); )
+-	{
+-		bool stillActive = false;
+-		for( unsigned int j = 0; j < activePlayers.size(); ++j )
+-		{
+-			if( m_playerFlags[i]->m_pNetworkPlayer == activePlayers[j] )
+-			{
+-				stillActive = true;
+-				break;
+-			}
+-		}
+-
+-		if( !stillActive )
+-		{
+-			delete m_playerFlags[i];
+-			m_playerFlags[i] = m_playerFlags.back();
+-			m_playerFlags.pop_back();
+-			continue;
+-		}
+-
+-		++i;
+-	}
+-
+-	// Ensure an entry exists before trying to set per-system flags.
+-	bool hasEntry = false;
+-	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+-	{
+-		if( m_playerFlags[i]->m_pNetworkPlayer == pNetworkPlayer )
+-		{
+-			hasEntry = true;
+-			break;
+-		}
+-	}
+-	if( !hasEntry )
+-	{
+-		SystemFlagAddPlayer(pNetworkPlayer);
+-	}
+-
+ 	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+ 	{
+ 		if( pNetworkPlayer->IsSameSystem(m_playerFlags[i]->m_pNetworkPlayer) )
+@@ -1468,106 +1302,27 @@ INetworkPlayer *CPlatformNetworkManagerSony::getNetworkPlayer(SQRNetworkPlayer *
+ 
+ INetworkPlayer *CPlatformNetworkManagerSony::GetLocalPlayerByUserIndex(int userIndex )
+ {
+-	SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetLocalPlayerByUserIndex(userIndex);
+-	INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+-	if(player == NULL && sqrPlayer != NULL)
+-	{
+-		player = addNetworkPlayer(sqrPlayer);
+-	}
+-	return player;
++	return getNetworkPlayer(m_pSQRNet->GetLocalPlayerByUserIndex(userIndex)); 
+ }
+ 
+ INetworkPlayer *CPlatformNetworkManagerSony::GetPlayerByIndex(int playerIndex)
+ {
+-	std::vector<INetworkPlayer *> players;
+-
+-	const int sqrCount = m_pSQRNet->GetPlayerCount();
+-	for(int i = 0; i < sqrCount; ++i)
+-	{
+-		SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetPlayerByIndex(i);
+-		INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+-		if(player == NULL && sqrPlayer != NULL)
+-		{
+-			player = addNetworkPlayer(sqrPlayer);
+-		}
+-		AppendUniquePlayer(players, player);
+-	}
+-
+-	const int directCount = Socket::GetDirectPlayerCount();
+-	for(int i = 0; i < directCount; ++i)
+-	{
+-		AppendUniquePlayer(players, Socket::GetDirectPlayerByIndex(i));
+-	}
+-
+-	if(playerIndex < 0 || playerIndex >= (int)players.size())
+-	{
+-		return NULL;
+-	}
+-
+-	return players[playerIndex];
++	return getNetworkPlayer(m_pSQRNet->GetPlayerByIndex(playerIndex));
+ }
+ 
+ INetworkPlayer * CPlatformNetworkManagerSony::GetPlayerByXuid(PlayerUID xuid)
+ {
+-	SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetPlayerByXuid(xuid);
+-	INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+-	if(player == NULL && sqrPlayer != NULL)
+-	{
+-		player = addNetworkPlayer(sqrPlayer);
+-	}
+-	if(player != NULL)
+-	{
+-		return player;
+-	}
+-
+-	const int directCount = Socket::GetDirectPlayerCount();
+-	for(int i = 0; i < directCount; ++i)
+-	{
+-		INetworkPlayer *directPlayer = Socket::GetDirectPlayerByIndex(i);
+-		if(directPlayer != NULL && ProfileManager.AreXUIDSEqual(directPlayer->GetUID(), xuid))
+-		{
+-			return directPlayer;
+-		}
+-	}
+-
+-	return NULL;
++	return getNetworkPlayer(m_pSQRNet->GetPlayerByXuid(xuid));
+ }
+ 
+ INetworkPlayer * CPlatformNetworkManagerSony::GetPlayerBySmallId(unsigned char smallId)
+ {
+-	SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetPlayerBySmallId(smallId);
+-	INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+-	if(player == NULL && sqrPlayer != NULL)
+-	{
+-		player = addNetworkPlayer(sqrPlayer);
+-	}
+-	if(player != NULL && player->GetSmallId() == smallId)
+-	{
+-		return player;
+-	}
+-
+-	return Socket::GetDirectPlayerBySmallId(smallId);
++	return getNetworkPlayer(m_pSQRNet->GetPlayerBySmallId(smallId));
+ }
+ 
+ INetworkPlayer *CPlatformNetworkManagerSony::GetHostPlayer()
+ {
+-	const int directCount = Socket::GetDirectPlayerCount();
+-	for(int i = 0; i < directCount; ++i)
+-	{
+-		INetworkPlayer *directPlayer = Socket::GetDirectPlayerByIndex(i);
+-		if(directPlayer != NULL && directPlayer->IsHost())
+-		{
+-			return directPlayer;
+-		}
+-	}
+-
+-	SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetHostPlayer();
+-	INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+-	if(player == NULL && sqrPlayer != NULL)
+-	{
+-		player = addNetworkPlayer(sqrPlayer);
+-	}
+-	return player;
++	return getNetworkPlayer(m_pSQRNet->GetHostPlayer());
+ }
+ 
+ bool CPlatformNetworkManagerSony::IsHost()
+@@ -1577,10 +1332,6 @@ bool CPlatformNetworkManagerSony::IsHost()
+ 
+ bool CPlatformNetworkManagerSony::JoinGameFromInviteInfo( int userIndex, int userMask, const INVITE_INFO *pInviteInfo)
+ {
+-	if( pInviteInfo == NULL )
+-	{
+-		return false;
+-	}
+ 	return m_pSQRNet->JoinRoom( pInviteInfo->m_RoomId, pInviteInfo->m_ServerId, userMask, pInviteInfo );
+ }
+ 
+diff --git a/Minecraft.Client/Common/UI/UIScene_LoadOrJoinMenu.cpp b/Minecraft.Client/Common/UI/UIScene_LoadOrJoinMenu.cpp
+index 176ab6bb..1d90da77 100644
+--- a/Minecraft.Client/Common/UI/UIScene_LoadOrJoinMenu.cpp
++++ b/Minecraft.Client/Common/UI/UIScene_LoadOrJoinMenu.cpp
+@@ -1,7 +1,6 @@
+ #include "stdafx.h"
+ #include "UI.h"
+ #include "UIScene_LoadOrJoinMenu.h"
+-#include <stdlib.h>
+ 
+ #include "..\..\..\Minecraft.World\StringHelpers.h"
+ #include "..\..\..\Minecraft.World\net.minecraft.world.item.h"
+@@ -14,12 +13,7 @@
+ #include "..\..\MinecraftServer.h"
+ #include "..\..\TexturePackRepository.h"
+ #include "..\..\TexturePack.h"
+-#include "..\..\Minecraft.h"
+-#include "..\..\GuiParticles.h"
+-#include "..\..\ConnectScreen.h"
+ #include "..\Network\SessionInfo.h"
+-#include "..\Network\NetworkPlayerInterface.h"
+-#include "..\..\..\Minecraft.World\Socket.h"
+ #if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+ #include "Common\Network\Sony\SonyHttp.h"
+ #include "Common\Network\Sony\SonyRemoteStorage.h"
+@@ -57,171 +51,6 @@ C4JStorage::SAVETRANSFER_FILE_DETAILS UIScene_LoadOrJoinMenu::m_debugTransferDet
+ #endif
+ #endif
+ 
+-namespace
+-{
+-bool TryParseTcpPort(const wstring& text, int *portOut)
+-{
+-	if(portOut == NULL)
+-	{
+-		return false;
+-	}
+-
+-	const wstring trimmed = trimString(text);
+-	if(trimmed.empty())
+-	{
+-		return false;
+-	}
+-
+-	wchar_t *end = NULL;
+-	long parsed = wcstol(trimmed.c_str(), &end, 10);
+-	if(end == trimmed.c_str() || *end != L'\0' || parsed <= 0 || parsed > 65535)
+-	{
+-		return false;
+-	}
+-
+-	*portOut = (int)parsed;
+-	return true;
+-}
+-
+-bool ParseDirectConnectEndpoint(const wstring& endpoint, wstring *hostOut, int *portOut)
+-{
+-	if(hostOut == NULL || portOut == NULL)
+-	{
+-		return false;
+-	}
+-
+-	const wstring trimmed = trimString(endpoint);
+-	if(trimmed.empty())
+-	{
+-		return false;
+-	}
+-
+-	wstring host = trimmed;
+-	int port = 25565;
+-
+-	if(trimmed[0] == L'[')
+-	{
+-		const size_t closeBracket = trimmed.find(L']');
+-		if(closeBracket == wstring::npos)
+-		{
+-			return false;
+-		}
+-
+-		host = trimString(trimmed.substr(1, closeBracket - 1));
+-		const wstring remainder = trimString(trimmed.substr(closeBracket + 1));
+-		if(!remainder.empty())
+-		{
+-			if(remainder[0] != L':')
+-			{
+-				return false;
+-			}
+-
+-			if(!TryParseTcpPort(remainder.substr(1), &port))
+-			{
+-				return false;
+-			}
+-		}
+-	}
+-	else
+-	{
+-		vector<wstring> parts = stringSplit(trimmed, L':');
+-		if(parts.size() == 2)
+-		{
+-			host = trimString(parts[0]);
+-			if(!TryParseTcpPort(parts[1], &port))
+-			{
+-				return false;
+-			}
+-		}
+-		else if(parts.size() > 2)
+-		{
+-			// Treat unbracketed IPv6 as host-only and use default port.
+-			host = trimmed;
+-		}
+-	}
+-
+-	if(host.empty())
+-	{
+-		return false;
+-	}
+-
+-	*hostOut = host;
+-	*portOut = port;
+-	return true;
+-}
+-
+-bool StartDirectConnectViaNetworkFlow(Minecraft *minecraft, const wstring& host, int port, const char *flowTag)
+-{
+-	if(minecraft == NULL)
+-	{
+-		return false;
+-	}
+-
+-	const int primaryPad = ProfileManager.GetPrimaryPad();
+-	const int localUsersMask = g_NetworkManager.GetLocalPlayerMask(primaryPad);
+-
+-	minecraft->clearConnectionFailed();
+-	app.SetTutorialMode(false);
+-	g_NetworkManager.SetLocalGame(false);
+-
+-#ifndef _XBOX
+-	// Ensure local wrapper exists before entering join state for the direct TCP socket.
+-	if(g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad) == NULL)
+-	{
+-		g_NetworkManager.FakeLocalPlayerJoined();
+-	}
+-#endif
+-
+-	if(!g_NetworkManager.JoinGameFromInviteInfo(primaryPad, localUsersMask, NULL))
+-	{
+-		app.DebugPrintf("Direct connect (%s) failed to enter client session state\n", flowTag);
+-		return false;
+-	}
+-
+-	INetworkPlayer *localPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad);
+-	if(localPlayer == NULL)
+-	{
+-		app.DebugPrintf("Direct connect (%s) failed: local network player not available\n", flowTag);
+-		return false;
+-	}
+-
+-	Socket *existingSocket = localPlayer->GetSocket();
+-	if(existingSocket != NULL)
+-	{
+-		if(!existingSocket->close(false))
+-		{
+-			existingSocket->close(true);
+-		}
+-		localPlayer->SetSocket(NULL);
+-	}
+-
+-	Socket *directSocket = new Socket(host, port);
+-	if(!directSocket->createdOk)
+-	{
+-		app.DebugPrintf("Direct connect (%s) failed: unable to open TCP socket to %ls:%d\n", flowTag, host.c_str(), port);
+-		delete directSocket;
+-		return false;
+-	}
+-
+-	localPlayer->SetSocket(directSocket);
+-	directSocket->setPlayer(localPlayer);
+-
+-	LoadingInputParams *loadingParams = new LoadingInputParams();
+-	loadingParams->func = &CGameNetworkManager::RunNetworkGameThreadProc;
+-	loadingParams->lpParam = NULL;
+-
+-	UIFullscreenProgressCompletionData *completionData = new UIFullscreenProgressCompletionData();
+-	completionData->bShowBackground = TRUE;
+-	completionData->bShowLogo = TRUE;
+-	completionData->type = e_ProgressCompletion_CloseAllPlayersUIScenes;
+-	completionData->iPad = DEFAULT_XUI_MENU_USER;
+-	loadingParams->completionData = completionData;
+-
+-	ui.NavigateToScene(primaryPad, eUIScene_FullscreenProgress, loadingParams);
+-	return true;
+-}
+-}
+-
+ int UIScene_LoadOrJoinMenu::LoadSaveDataThumbnailReturned(LPVOID lpParam,PBYTE pbThumbnail,DWORD dwThumbnailBytes)
+ {
+     UIScene_LoadOrJoinMenu *pClass= (UIScene_LoadOrJoinMenu *)lpParam;
+@@ -295,10 +124,9 @@ UIScene_LoadOrJoinMenu::UIScene_LoadOrJoinMenu(int iPad, void *initData, UILayer
+     m_bSavesDisplayed=false;
+     m_saveDetails = NULL;
+     m_iSaveDetailsCount = 0;
+-	m_iTexturePacksNotInstalled = 0;
++    m_iTexturePacksNotInstalled = 0;
+ 	m_bCopying = false;
+ 	m_bCopyingCancelled = false;
+-	m_directConnectAddress = L"";
+ 
+ #ifndef _XBOX_ONE
+     m_bSaveTransferCancelled=false;
+@@ -1167,27 +995,9 @@ void UIScene_LoadOrJoinMenu::handleInput(int iPad, int key, bool repeat, bool pr
+         break;
+     case ACTION_MENU_Y:
+ #if defined(__PS3__) || defined(__PSVITA__) || defined(__ORBIS__)
++		m_eAction = eAction_ViewInvites;
+         if(pressed && iPad == ProfileManager.GetPrimaryPad())
+         {
+-#ifdef __PS3__
+-			if(m_buttonListGames.getItemCount() == 0)
+-			{
+-				m_bIgnoreInput = true;
+-				InputManager.RequestKeyboard(
+-					L"Direct Connect",
+-					m_directConnectAddress.c_str(),
+-					(DWORD)m_iPad,
+-					128,
+-					&UIScene_LoadOrJoinMenu::KeyboardCompleteDirectConnectCallback,
+-					this,
+-					C_4JInput::EKeyboardMode_Default);
+-				handled = true;
+-				break;
+-			}
+-#endif
+-
+-			m_eAction = eAction_ViewInvites;
+-
+ #ifdef __ORBIS__
+ 			// Check if PSN is unavailable because of age restriction
+ 			int npAvailability = ProfileManager.getNPAvailability(iPad);
+@@ -1355,75 +1165,6 @@ void UIScene_LoadOrJoinMenu::handleInput(int iPad, int key, bool repeat, bool pr
+     }
+ }
+ 
+-int UIScene_LoadOrJoinMenu::KeyboardCompleteDirectConnectCallback(LPVOID lpParam,bool bRes)
+-{
+-	UIScene_LoadOrJoinMenu *pClass = (UIScene_LoadOrJoinMenu *)lpParam;
+-	if(pClass == NULL)
+-	{
+-		return 0;
+-	}
+-
+-	pClass->m_bIgnoreInput = false;
+-
+-	uint16_t text[128];
+-	ZeroMemory(text, sizeof(text));
+-	InputManager.GetText(text);
+-
+-	wstring endpoint = trimString((wchar_t *)text);
+-	app.DebugPrintf("Direct connect keyboard closed (IUI): bRes=%d endpoint='%ls'\n", bRes ? 1 : 0, endpoint.c_str());
+-	if(endpoint.empty())
+-	{
+-		return 0;
+-	}
+-
+-	bool shouldConnect = bRes;
+-#ifdef __PS3__
+-	// PS3 keyboard may report cancel despite returning edited text.
+-	if(!shouldConnect && endpoint != pClass->m_directConnectAddress)
+-	{
+-		shouldConnect = true;
+-	}
+-#endif
+-	if(!shouldConnect)
+-	{
+-		return 0;
+-	}
+-
+-	pClass->m_directConnectAddress = endpoint;
+-
+-	wstring host;
+-	int port = 25565;
+-	if(!ParseDirectConnectEndpoint(endpoint, &host, &port))
+-	{
+-		UINT uiIDA[1];
+-		uiIDA[0] = IDS_CONFIRM_OK;
+-		ui.RequestMessageBox(IDS_CONNECTION_FAILED, IDS_ERROR_NETWORK, uiIDA, 1, pClass->m_iPad, NULL, NULL, app.GetStringTable());
+-		return 0;
+-	}
+-
+-	Minecraft *minecraft = Minecraft::GetInstance();
+-	pClass->m_bIgnoreInput = true;
+-	app.DebugPrintf("Attempting direct connect (IUI) to %ls:%d\n", host.c_str(), port);
+-	if(!StartDirectConnectViaNetworkFlow(minecraft, host, port, "IUI"))
+-	{
+-		app.DebugPrintf("Direct connect (IUI) falling back to legacy ConnectScreen flow\n");
+-		if(minecraft != NULL)
+-		{
+-			ui.CloseUIScenes(pClass->m_iPad);
+-			minecraft->setScreen(new ConnectScreen(minecraft, host, port));
+-		}
+-		else
+-		{
+-			pClass->m_bIgnoreInput = false;
+-			UINT uiIDA[1];
+-			uiIDA[0] = IDS_CONFIRM_OK;
+-			ui.RequestMessageBox(IDS_CONNECTION_FAILED, IDS_ERROR_NETWORK, uiIDA, 1, pClass->m_iPad, NULL, NULL, app.GetStringTable());
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+ int UIScene_LoadOrJoinMenu::KeyboardCompleteWorldNameCallback(LPVOID lpParam,bool bRes)
+ {
+     // 4J HEG - No reason to set value if keyboard was cancelled
+diff --git a/Minecraft.Client/Common/UI/UIScene_LoadOrJoinMenu.h b/Minecraft.Client/Common/UI/UIScene_LoadOrJoinMenu.h
+index 589d9b3a..01d94b05 100644
+--- a/Minecraft.Client/Common/UI/UIScene_LoadOrJoinMenu.h
++++ b/Minecraft.Client/Common/UI/UIScene_LoadOrJoinMenu.h
+@@ -105,7 +105,6 @@ private:
+ 	bool m_bSaveTransferCancelled;
+ #endif
+ 	bool m_bUpdateSaveSize;
+-	wstring m_directConnectAddress;
+ 
+ public:
+ 	UIScene_LoadOrJoinMenu(int iPad, void *initData, UILayer *parentLayer);
+@@ -154,7 +153,6 @@ public:
+ 	static int DeleteSaveDataReturned(LPVOID lpParam,bool bRes);
+ 	static int RenameSaveDataReturned(LPVOID lpParam,bool bRes);
+ 	static int KeyboardCompleteWorldNameCallback(LPVOID lpParam,bool bRes);
+-	static int KeyboardCompleteDirectConnectCallback(LPVOID lpParam,bool bRes);
+ protected:
+ 	void handlePress(F64 controlId, F64 childId);
+ 	void LoadLevelGen(LevelGenerationOptions *levelGen);
+diff --git a/Minecraft.Client/Common/XUI/XUI_MultiGameJoinLoad.cpp b/Minecraft.Client/Common/XUI/XUI_MultiGameJoinLoad.cpp
+index 79659397..73f25da5 100644
+--- a/Minecraft.Client/Common/XUI/XUI_MultiGameJoinLoad.cpp
++++ b/Minecraft.Client/Common/XUI/XUI_MultiGameJoinLoad.cpp
+@@ -2,13 +2,11 @@
+ #include <xuiresource.h>
+ #include <xuiapp.h>
+ #include <assert.h>
+-#include <stdlib.h>
+ #include "..\..\..\Minecraft.World\StringHelpers.h"
+ #include "..\..\Common\Tutorial\TutorialMode.h"
+ #include "..\..\..\Minecraft.World\ConsoleSaveFileIO.h"
+ #include "..\..\LocalPlayer.h"
+ #include "..\..\Minecraft.h"
+-#include "..\..\ConnectScreen.h"
+ #include "..\..\ProgressRenderer.h"
+ #include "..\..\..\Minecraft.World\AABB.h"
+ #include "..\..\..\Minecraft.World\Vec3.h"
+@@ -23,8 +21,6 @@
+ #include "XUI_MultiGameCreate.h"
+ #include "..\..\MinecraftServer.h"
+ #include "..\..\Options.h"
+-#include "..\Network\NetworkPlayerInterface.h"
+-#include "..\..\..\Minecraft.World\Socket.h"
+ 
+ #include "..\GameRules\LevelGenerationOptions.h"
+ #include "..\..\TexturePackRepository.h"
+@@ -34,171 +30,6 @@
+ #define CHECKFORAVAILABLETEXTUREPACKS_TIMER_ID 3
+ #define CHECKFORAVAILABLETEXTUREPACKS_TIMER_TIME 100
+ 
+-namespace
+-{
+-bool TryParseTcpPort(const wstring& text, int *portOut)
+-{
+-	if(portOut == NULL)
+-	{
+-		return false;
+-	}
+-
+-	const wstring trimmed = trimString(text);
+-	if(trimmed.empty())
+-	{
+-		return false;
+-	}
+-
+-	wchar_t *end = NULL;
+-	long parsed = wcstol(trimmed.c_str(), &end, 10);
+-	if(end == trimmed.c_str() || *end != L'\0' || parsed <= 0 || parsed > 65535)
+-	{
+-		return false;
+-	}
+-
+-	*portOut = (int)parsed;
+-	return true;
+-}
+-
+-bool ParseDirectConnectEndpoint(const wstring& endpoint, wstring *hostOut, int *portOut)
+-{
+-	if(hostOut == NULL || portOut == NULL)
+-	{
+-		return false;
+-	}
+-
+-	const wstring trimmed = trimString(endpoint);
+-	if(trimmed.empty())
+-	{
+-		return false;
+-	}
+-
+-	wstring host = trimmed;
+-	int port = 25565;
+-
+-	if(trimmed[0] == L'[')
+-	{
+-		const size_t closeBracket = trimmed.find(L']');
+-		if(closeBracket == wstring::npos)
+-		{
+-			return false;
+-		}
+-
+-		host = trimString(trimmed.substr(1, closeBracket - 1));
+-		const wstring remainder = trimString(trimmed.substr(closeBracket + 1));
+-		if(!remainder.empty())
+-		{
+-			if(remainder[0] != L':')
+-			{
+-				return false;
+-			}
+-
+-			if(!TryParseTcpPort(remainder.substr(1), &port))
+-			{
+-				return false;
+-			}
+-		}
+-	}
+-	else
+-	{
+-		vector<wstring> parts = stringSplit(trimmed, L':');
+-		if(parts.size() == 2)
+-		{
+-			host = trimString(parts[0]);
+-			if(!TryParseTcpPort(parts[1], &port))
+-			{
+-				return false;
+-			}
+-		}
+-		else if(parts.size() > 2)
+-		{
+-			// Treat unbracketed IPv6 as host-only and use default port.
+-			host = trimmed;
+-		}
+-	}
+-
+-	if(host.empty())
+-	{
+-		return false;
+-	}
+-
+-	*hostOut = host;
+-	*portOut = port;
+-	return true;
+-}
+-
+-bool StartDirectConnectViaNetworkFlow(Minecraft *minecraft, const wstring& host, int port, const char *flowTag)
+-{
+-	if(minecraft == NULL)
+-	{
+-		return false;
+-	}
+-
+-	const int primaryPad = ProfileManager.GetPrimaryPad();
+-	const int localUsersMask = g_NetworkManager.GetLocalPlayerMask(primaryPad);
+-
+-	minecraft->clearConnectionFailed();
+-	app.SetTutorialMode(false);
+-	g_NetworkManager.SetLocalGame(false);
+-
+-#ifndef _XBOX
+-	// Ensure local wrapper exists before entering join state for the direct TCP socket.
+-	if(g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad) == NULL)
+-	{
+-		g_NetworkManager.FakeLocalPlayerJoined();
+-	}
+-#endif
+-
+-	if(!g_NetworkManager.JoinGameFromInviteInfo(primaryPad, localUsersMask, NULL))
+-	{
+-		app.DebugPrintf("Direct connect (%s) failed to enter client session state\n", flowTag);
+-		return false;
+-	}
+-
+-	INetworkPlayer *localPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad);
+-	if(localPlayer == NULL)
+-	{
+-		app.DebugPrintf("Direct connect (%s) failed: local network player not available\n", flowTag);
+-		return false;
+-	}
+-
+-	Socket *existingSocket = localPlayer->GetSocket();
+-	if(existingSocket != NULL)
+-	{
+-		if(!existingSocket->close(false))
+-		{
+-			existingSocket->close(true);
+-		}
+-		localPlayer->SetSocket(NULL);
+-	}
+-
+-	Socket *directSocket = new Socket(host, port);
+-	if(!directSocket->createdOk)
+-	{
+-		app.DebugPrintf("Direct connect (%s) failed: unable to open TCP socket to %ls:%d\n", flowTag, host.c_str(), port);
+-		delete directSocket;
+-		return false;
+-	}
+-
+-	localPlayer->SetSocket(directSocket);
+-	directSocket->setPlayer(localPlayer);
+-
+-	LoadingInputParams *loadingParams = new LoadingInputParams();
+-	loadingParams->func = &CGameNetworkManager::RunNetworkGameThreadProc;
+-	loadingParams->lpParam = NULL;
+-
+-	UIFullscreenProgressCompletionData *completionData = new UIFullscreenProgressCompletionData();
+-	completionData->bShowBackground = TRUE;
+-	completionData->bShowLogo = TRUE;
+-	completionData->type = e_ProgressCompletion_CloseAllPlayersUIScenes;
+-	completionData->iPad = DEFAULT_XUI_MENU_USER;
+-	loadingParams->completionData = completionData;
+-
+-	ui.NavigateToScene(primaryPad, eUIScene_FullscreenProgress, loadingParams);
+-	return true;
+-}
+-}
+-
+ //----------------------------------------------------------------------------------
+ // Performs initialization tasks - retrieves controls.
+ //----------------------------------------------------------------------------------
+@@ -230,7 +61,6 @@ HRESULT CScene_MultiGameJoinLoad::OnInit( XUIMessageInit* pInitData, BOOL& bHand
+ 	m_bKillSaveInfoEnumerate=false;
+ 
+ 	m_bShowingPartyGamesOnly = false;
+-	m_directConnectAddress = L"";
+ 
+ 	m_bRetrievingSaveInfo=false;
+ 	m_bSaveTransferInProgress=false;
+@@ -813,35 +643,15 @@ HRESULT CScene_MultiGameJoinLoad::OnKeyDown(XUIMessageInput* pInputData, BOOL& r
+ 		CXuiSceneBase::PlayUISFX(eSFX_Press);
+ 		break;
+ 	case VK_PAD_Y:
+-#ifdef __PS3__
+-		if(m_pGamesList->GetItemCount() == 0)
++		if(m_pGamesList->TreeHasFocus() && m_pGamesList->GetItemCount() > 0)
+ 		{
+-			m_bIgnoreInput = true;
+-			InputManager.RequestKeyboard(
+-				L"Direct Connect",
+-				m_directConnectAddress.c_str(),
+-				(DWORD)pInputData->UserIndex,
+-				128,
+-				&CScene_MultiGameJoinLoad::KeyboardDirectConnectReturned,
+-				this,
+-				C_4JInput::EKeyboardMode_Default);
+-			CXuiSceneBase::PlayUISFX(eSFX_Press);
+-			break;
+-		}
+-#endif
++			DWORD nIndex = m_pGamesList->GetCurSel();
++			FriendSessionInfo *pSelectedSession = currentSessions.at( nIndex );
+ 
+-		if(m_pGamesList->TreeHasFocus())
+-		{
+-			if(m_pGamesList->GetItemCount() > 0)
+-			{
+-				DWORD nIndex = m_pGamesList->GetCurSel();
+-				FriendSessionInfo *pSelectedSession = currentSessions.at( nIndex );
+-
+-				PlayerUID xuid = pSelectedSession->data.hostPlayerUID;
+-				if( xuid != INVALID_XUID )
+-					hr = XShowGamerCardUI(ProfileManager.GetLockedProfile(), xuid);
+-				CXuiSceneBase::PlayUISFX(eSFX_Press);
+-			}
++			PlayerUID xuid = pSelectedSession->data.hostPlayerUID;
++			if( xuid != INVALID_XUID )
++				hr = XShowGamerCardUI(ProfileManager.GetLockedProfile(), xuid);
++			CXuiSceneBase::PlayUISFX(eSFX_Press);
+ 		}
+ 		else if(DoesSavesListHaveFocus())
+ 		{
+@@ -2576,75 +2386,6 @@ int CScene_MultiGameJoinLoad::KeyboardReturned(void *pParam,bool bSet)
+ 	return hr;
+ }
+ 
+-int CScene_MultiGameJoinLoad::KeyboardDirectConnectReturned(void *pParam,bool bSet)
+-{
+-	CScene_MultiGameJoinLoad* pClass = (CScene_MultiGameJoinLoad*)pParam;
+-	if(pClass == NULL)
+-	{
+-		return 0;
+-	}
+-
+-	pClass->m_bIgnoreInput = false;
+-
+-	uint16_t text[128];
+-	ZeroMemory(text, sizeof(text));
+-	InputManager.GetText(text);
+-
+-	wstring endpoint = trimString((wchar_t *)text);
+-	app.DebugPrintf("Direct connect keyboard closed (XUI): bSet=%d endpoint='%ls'\n", bSet ? 1 : 0, endpoint.c_str());
+-	if(endpoint.empty())
+-	{
+-		return 0;
+-	}
+-
+-	bool shouldConnect = bSet;
+-#ifdef __PS3__
+-	// PS3 keyboard may report cancel despite returning edited text.
+-	if(!shouldConnect && endpoint != pClass->m_directConnectAddress)
+-	{
+-		shouldConnect = true;
+-	}
+-#endif
+-	if(!shouldConnect)
+-	{
+-		return 0;
+-	}
+-
+-	pClass->m_directConnectAddress = endpoint;
+-
+-	wstring host;
+-	int port = 25565;
+-	if(!ParseDirectConnectEndpoint(endpoint, &host, &port))
+-	{
+-		UINT uiIDA[1];
+-		uiIDA[0] = IDS_CONFIRM_OK;
+-		StorageManager.RequestMessageBox(IDS_CONNECTION_FAILED, IDS_ERROR_NETWORK, uiIDA, 1, ProfileManager.GetPrimaryPad(), NULL, NULL, app.GetStringTable());
+-		return 0;
+-	}
+-
+-	Minecraft *minecraft = Minecraft::GetInstance();
+-	pClass->m_bIgnoreInput = true;
+-	app.DebugPrintf("Attempting direct connect (XUI) to %ls:%d\n", host.c_str(), port);
+-	if(!StartDirectConnectViaNetworkFlow(minecraft, host, port, "XUI"))
+-	{
+-		app.DebugPrintf("Direct connect (XUI) falling back to legacy ConnectScreen flow\n");
+-		if(minecraft != NULL)
+-		{
+-			app.CloseXuiScenes(ProfileManager.GetPrimaryPad());
+-			minecraft->setScreen(new ConnectScreen(minecraft, host, port));
+-		}
+-		else
+-		{
+-			pClass->m_bIgnoreInput = false;
+-			UINT uiIDA[1];
+-			uiIDA[0] = IDS_CONFIRM_OK;
+-			StorageManager.RequestMessageBox(IDS_CONNECTION_FAILED, IDS_ERROR_NETWORK, uiIDA, 1, ProfileManager.GetPrimaryPad(), NULL, NULL, app.GetStringTable());
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+ int CScene_MultiGameJoinLoad::LoadSaveDataForRenameReturned(void *pParam,bool bContinue)
+ {
+ 	CScene_MultiGameJoinLoad* pClass = (CScene_MultiGameJoinLoad*)pParam;
+@@ -3023,4 +2764,4 @@ void CScene_MultiGameJoinLoad::SaveUploadCompleteCallback(LPVOID lpParam)
+ 	app.TMSPP_SetTitleGroupID(GROUP_ID);
+ 	// 	app.getRemoteStorage()->abort();
+ 	// 	pClass->m_eSaveUploadState = eSaveUpload_Idle;
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.Client/Common/XUI/XUI_MultiGameJoinLoad.h b/Minecraft.Client/Common/XUI/XUI_MultiGameJoinLoad.h
+index 0ac04fac..e91fbac2 100644
+--- a/Minecraft.Client/Common/XUI/XUI_MultiGameJoinLoad.h
++++ b/Minecraft.Client/Common/XUI/XUI_MultiGameJoinLoad.h
+@@ -119,7 +119,6 @@ private:
+ 	static int CopySaveReturned(void *pParam,bool bResult);
+ 	static int LoadSaveDataForRenameReturned(void *pParam,bool bContinue);
+ 	static int KeyboardReturned(void *pParam,bool bSet);
+-	static int KeyboardDirectConnectReturned(void *pParam,bool bSet);
+ 	static void StartGameFromSave(CScene_MultiGameJoinLoad* pClass, DWORD dwLocalUsersMask);
+ 	static int TexturePackDialogReturned(void *pParam,int iPad,C4JStorage::EMessageResult result);
+ 	static int SaveTransferDialogReturned(void *pParam,int iPad,C4JStorage::EMessageResult result);
+@@ -151,7 +150,6 @@ private:
+ 	bool m_bRetrievingSaveInfo;
+ 	//bool m_bSaveRenamed;
+ 	WCHAR m_wchNewName[XCONTENT_MAX_DISPLAYNAME_LENGTH];
+-	wstring m_directConnectAddress;
+ 	unsigned char m_szSeed[50];
+ 
+ 	vector<LevelGenerationOptions *> *m_generators;
+@@ -167,4 +165,4 @@ private:
+ 	bool m_bTransferComplete;
+ 	bool m_bTransferFail;
+ 	bool m_bSaveTransferInProgress;
+-};
++};
+\ No newline at end of file
+diff --git a/Minecraft.Client/Extrax64Stubs.cpp b/Minecraft.Client/Extrax64Stubs.cpp
+index 6e9ffe43..334f0123 100644
+--- a/Minecraft.Client/Extrax64Stubs.cpp
++++ b/Minecraft.Client/Extrax64Stubs.cpp
+@@ -34,14 +34,6 @@
+ #include <perf.h>
+ #endif
+ 
+-#ifndef E_FAIL
+-#define E_FAIL ((HRESULT)0x80004005L)
+-#endif
+-
+-#ifndef UNREFERENCED_PARAMETER
+-#define UNREFERENCED_PARAMETER(P) (void)(P)
+-#endif
+-
+ #if !defined(__PS3__) && !defined(__ORBIS__) && !defined(__PSVITA__)
+ #ifdef _WINDOWS64
+ //C4JStorage StorageManager;
+@@ -193,132 +185,20 @@ D3DXVECTOR3::D3DXVECTOR3() {}
+ D3DXVECTOR3::D3DXVECTOR3(float x,float y,float z) : x(x), y(y), z(z) {}
+ D3DXVECTOR3& D3DXVECTOR3::operator += ( CONST D3DXVECTOR3& add ) { x += add.x; y += add.y; z += add.z; return *this; }
+ 
+-namespace
+-{
+-bool s_stubIdentityInitialised = false;
+-ULONGLONG s_stubXuidBase = 0;
+-char s_stubGamertagA[XUSER_MAX_COUNT][32];
+-wchar_t s_stubGamertagW[XUSER_MAX_COUNT][32];
+-
+-DWORD StubSupportedLocalUserMask()
+-{
+-	DWORD mask = 0;
+-	for(unsigned int i = 0; i < XUSER_MAX_COUNT && i < 32; ++i)
+-	{
+-		mask |= (1u << i);
+-	}
+-	return mask;
+-}
+-
+-bool StubSupportsLocalUser(DWORD userIndex)
+-{
+-	return userIndex < XUSER_MAX_COUNT;
+-}
+-
+-DWORD StubClampLocalUserMask(DWORD usersMask)
+-{
+-	DWORD clampedMask = usersMask & StubSupportedLocalUserMask();
+-	if(clampedMask == 0)
+-	{
+-		clampedMask = (1u << 0);
+-	}
+-	return clampedMask;
+-}
+-
+-void EnsureStubIdentity()
+-{
+-	if(s_stubIdentityInitialised)
+-	{
+-		return;
+-	}
+-
+-	DWORD pid = 1;
+-#ifdef _WINDOWS64
+-	pid = GetCurrentProcessId();
+-#endif
+-	s_stubXuidBase = 0xE000D45200000000ULL | ((ULONGLONG)(pid & 0x00FFFFFF) << 8);
+-
+-	for(unsigned int i = 0; i < XUSER_MAX_COUNT; ++i)
+-	{
+-#ifdef _WINDOWS64
+-		sprintf_s(s_stubGamertagA[i], sizeof(s_stubGamertagA[i]), "Player%u-%u", pid % 10000, i);
+-#else
+-		snprintf(s_stubGamertagA[i], sizeof(s_stubGamertagA[i]), "Player%u-%u", pid % 10000, i);
+-#endif
+-	}
+-	for(unsigned int i = 0; i < XUSER_MAX_COUNT; ++i)
+-	{
+-		swprintf(s_stubGamertagW[i], 32, L"Player%u-%u", pid % 10000, i);
+-	}
+-
+-	s_stubIdentityInitialised = true;
+-}
+-}
+-
+-extern bool _bQNetStubIsHost;
+-BYTE IQNetPlayer::GetSmallId()
+-{
+-	int idx = (int)(this - &IQNet::m_player[0]);
+-	if(idx < 0 || idx >= (int)XUSER_MAX_COUNT)
+-	{
+-		return 0;
+-	}
+-	if(!_bQNetStubIsHost)
+-	{
+-		// When acting as a client, reserve small id 0 for the remote host.
+-		return (BYTE)(idx + 1);
+-	}
+-	return (BYTE)idx;
+-}
++BYTE IQNetPlayer::GetSmallId() { return 0; }
+ void IQNetPlayer::SendData(IQNetPlayer *player, const void *pvData, DWORD dwDataSize, DWORD dwFlags)
+ {
+ 	app.DebugPrintf("Sending from 0x%x to 0x%x %d bytes\n",this,player,dwDataSize);
+ }
+-bool IQNetPlayer::IsSameSystem(IQNetPlayer *player)
+-{
+-	if(player == NULL)
+-	{
+-		return false;
+-	}
+-
+-	ULONG_PTR ptr = (ULONG_PTR)player;
+-	ULONG_PTR begin = (ULONG_PTR)&IQNet::m_player[0];
+-	ULONG_PTR end = (ULONG_PTR)&IQNet::m_player[XUSER_MAX_COUNT];
+-	return (ptr >= begin && ptr < end);
+-}
++bool IQNetPlayer::IsSameSystem(IQNetPlayer *player) { return true; }
+ DWORD IQNetPlayer::GetSendQueueSize( IQNetPlayer *player, DWORD dwFlags ) { return 0; }
+ DWORD IQNetPlayer::GetCurrentRtt() { return 0; }
+-extern bool _bQNetStubIsHost;
+-bool IQNetPlayer::IsHost() { return _bQNetStubIsHost && this == &IQNet::m_player[0]; }
++bool IQNetPlayer::IsHost() { return this == &IQNet::m_player[0]; }
+ bool IQNetPlayer::IsGuest() { return false; }
+ bool IQNetPlayer::IsLocal() { return true; }
+-PlayerUID IQNetPlayer::GetXuid()
+-{
+-	EnsureStubIdentity();
+-	int idx = (int)(this - &IQNet::m_player[0]);
+-	if(idx < 0 || idx >= (int)XUSER_MAX_COUNT)
+-	{
+-		idx = 0;
+-	}
+-#if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+-	PlayerUID uid;
+-	uid.setUserID(0x70000000u | (unsigned int)(idx & 0xFF));
+-	return uid;
+-#else
+-	return (s_stubXuidBase + (ULONGLONG)(idx & 0x0F)) | 0x100000000ULL;
+-#endif
+-}
+-LPCWSTR IQNetPlayer::GetGamertag()
+-{
+-	EnsureStubIdentity();
+-	int idx = (int)(this - &IQNet::m_player[0]);
+-	if(idx < 0 || idx >= (int)XUSER_MAX_COUNT)
+-	{
+-		idx = 0;
+-	}
+-	return s_stubGamertagW[idx];
+-}
+-int IQNetPlayer::GetSessionIndex() { return GetSmallId(); }
++PlayerUID IQNetPlayer::GetXuid() { return INVALID_XUID; }
++LPCWSTR IQNetPlayer::GetGamertag() { static const wchar_t *test = L"stub"; return test; }
++int IQNetPlayer::GetSessionIndex() { return 0; }
+ bool IQNetPlayer::IsTalking() { return false; }
+ bool IQNetPlayer::IsMutedByLocalUser(DWORD dwUserIndex) { return false; }
+ bool IQNetPlayer::HasVoice() { return false; }
+@@ -334,154 +214,19 @@ ULONG_PTR IQNetPlayer::GetCustomDataValue() {
+ IQNetPlayer IQNet::m_player[4];
+ 
+ bool _bQNetStubGameRunning = false;
+-bool _bQNetStubIsHost = true;
+-DWORD _dwQNetStubLocalUsersMask = (1u << 0);
+-
+-HRESULT IQNet::AddLocalPlayerByUserIndex(DWORD dwUserIndex)
+-{
+-	if(!StubSupportsLocalUser(dwUserIndex))
+-	{
+-		return E_FAIL;
+-	}
+ 
+-	_dwQNetStubLocalUsersMask |= (1u << dwUserIndex);
+-	return S_OK;
+-}
++HRESULT IQNet::AddLocalPlayerByUserIndex(DWORD dwUserIndex){ return S_OK; }
+ IQNetPlayer *IQNet::GetHostPlayer() { return &m_player[0]; }
+-IQNetPlayer *IQNet::GetLocalPlayerByUserIndex(DWORD dwUserIndex)
+-{
+-	if(!StubSupportsLocalUser(dwUserIndex))
+-	{
+-		return NULL;
+-	}
+-
+-	return (_dwQNetStubLocalUsersMask & (1u << dwUserIndex)) ? &m_player[dwUserIndex] : NULL;
+-}
+-IQNetPlayer *IQNet::GetPlayerByIndex(DWORD dwPlayerIndex)
+-{
+-	if(!_bQNetStubGameRunning)
+-	{
+-		return NULL;
+-	}
+-
+-	DWORD currentIndex = 0;
+-	for(DWORD localUser = 0; localUser < XUSER_MAX_COUNT; ++localUser)
+-	{
+-		if((_dwQNetStubLocalUsersMask & (1u << localUser)) == 0)
+-		{
+-			continue;
+-		}
+-
+-		if(currentIndex == dwPlayerIndex)
+-		{
+-			return &m_player[localUser];
+-		}
+-
+-		++currentIndex;
+-	}
+-
+-	return NULL;
+-}
+-IQNetPlayer *IQNet::GetPlayerBySmallId(BYTE SmallId)
+-{
+-	if(!_bQNetStubGameRunning)
+-	{
+-		return NULL;
+-	}
+-
+-	for(DWORD localUser = 0; localUser < XUSER_MAX_COUNT; ++localUser)
+-	{
+-		if((_dwQNetStubLocalUsersMask & (1u << localUser)) == 0)
+-		{
+-			continue;
+-		}
+-
+-		if(m_player[localUser].GetSmallId() == SmallId)
+-		{
+-			return &m_player[localUser];
+-		}
+-	}
+-
+-	return NULL;
+-}
+-IQNetPlayer *IQNet::GetPlayerByXuid(PlayerUID xuid)
+-{
+-	if(!_bQNetStubGameRunning)
+-	{
+-		return NULL;
+-	}
+-
+-	for(DWORD localUser = 0; localUser < XUSER_MAX_COUNT; ++localUser)
+-	{
+-		if((_dwQNetStubLocalUsersMask & (1u << localUser)) == 0)
+-		{
+-			continue;
+-		}
+-
+-			IQNetPlayer *localPlayer = &m_player[localUser];
+-			PlayerUID localXuidOnline = localPlayer->GetXuid();
+-#if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__) || defined(_DURANGO)
+-			if(xuid == localXuidOnline)
+-			{
+-				return localPlayer;
+-			}
+-#else
+-			PlayerUID localXuidOffline = localXuidOnline & ~0x100000000ULL;
+-			if(xuid == localXuidOnline || xuid == localXuidOffline)
+-			{
+-				return localPlayer;
+-			}
+-#endif
+-		}
+-
+-	return NULL;
+-}
+-DWORD IQNet::GetPlayerCount()
+-{
+-	if(!_bQNetStubGameRunning)
+-	{
+-		return 0;
+-	}
+-
+-	DWORD count = 0;
+-	for(DWORD localUser = 0; localUser < XUSER_MAX_COUNT; ++localUser)
+-	{
+-		if(_dwQNetStubLocalUsersMask & (1u << localUser))
+-		{
+-			++count;
+-		}
+-	}
+-
+-	return count;
+-}
++IQNetPlayer *IQNet::GetLocalPlayerByUserIndex(DWORD dwUserIndex) { return &m_player[dwUserIndex]; } 
++IQNetPlayer *IQNet::GetPlayerByIndex(DWORD dwPlayerIndex) { return &m_player[0]; }
++IQNetPlayer *IQNet::GetPlayerBySmallId(BYTE SmallId){ return &m_player[0]; }
++IQNetPlayer *IQNet::GetPlayerByXuid(PlayerUID xuid){ return &m_player[0]; }
++DWORD IQNet::GetPlayerCount() { return 1; }
+ QNET_STATE IQNet::GetState() { return _bQNetStubGameRunning ? QNET_STATE_GAME_PLAY : QNET_STATE_IDLE; }
+-bool IQNet::IsHost() { return _bQNetStubIsHost; }
+-HRESULT IQNet::JoinGameFromInviteInfo(DWORD dwUserIndex, DWORD dwUserMask, const INVITE_INFO *pInviteInfo)
+-{
+-	UNREFERENCED_PARAMETER(dwUserIndex);
+-	UNREFERENCED_PARAMETER(pInviteInfo);
+-	_bQNetStubIsHost = false;
+-	_bQNetStubGameRunning = true;
+-	_dwQNetStubLocalUsersMask = StubClampLocalUserMask(dwUserMask);
+-	if(StubSupportsLocalUser(dwUserIndex))
+-	{
+-		_dwQNetStubLocalUsersMask |= (1u << dwUserIndex);
+-	}
+-	_dwQNetStubLocalUsersMask = StubClampLocalUserMask(_dwQNetStubLocalUsersMask);
+-	return S_OK;
+-}
+-void IQNet::HostGame()
+-{
+-	_bQNetStubIsHost = true;
+-	_bQNetStubGameRunning = true;
+-	_dwQNetStubLocalUsersMask = (1u << 0);
+-}
+-void IQNet::EndGame()
+-{
+-	_bQNetStubGameRunning = false;
+-	_bQNetStubIsHost = true;
+-	_dwQNetStubLocalUsersMask = (1u << 0);
+-}
++bool IQNet::IsHost() { return true; }
++HRESULT IQNet::JoinGameFromInviteInfo(DWORD dwUserIndex, DWORD dwUserMask, const INVITE_INFO *pInviteInfo) { return S_OK; }
++void IQNet::HostGame() { _bQNetStubGameRunning = true; }
++void IQNet::EndGame() { _bQNetStubGameRunning = false; }
+ 
+ DWORD MinecraftDynamicConfigurations::GetTrialTime() { return DYNAMIC_CONFIG_DEFAULT_TRIAL_TIME; }
+ 
+@@ -496,25 +241,7 @@ DWORD XUserGetSigninInfo(
+          PXUSER_SIGNIN_INFO pSigninInfo
+ )
+ {
+-	if(pSigninInfo == NULL)
+-	{
+-		return E_FAIL;
+-	}
+-
+-	if(!ProfileManager.IsSignedIn((int)dwUserIndex))
+-	{
+-		pSigninInfo->xuid = INVALID_XUID;
+-		pSigninInfo->dwGuestNumber = 0;
+-		return E_FAIL;
+-	}
+-
+-	PlayerUID xuid = INVALID_XUID;
+-	const bool onlineXuid = (dwFlags & XUSER_GET_SIGNIN_INFO_ONLINE_XUID_ONLY) != 0;
+-	ProfileManager.GetXUID((int)dwUserIndex, &xuid, onlineXuid);
+-	pSigninInfo->xuid = xuid;
+-	pSigninInfo->dwGuestNumber = 0;
+-
+-	return S_OK;
++	return 0;
+ }
+ 
+ LPCWSTR CXuiStringTable::Lookup(LPCWSTR szId) { return szId; }
+@@ -656,7 +383,6 @@ DWORD XEnableGuestSignin(BOOL fEnable) { return 0; }
+ #ifdef _WINDOWS64
+ static void *profileData[4];
+ static bool s_bProfileIsFullVersion;
+-static int s_iPrimaryPad = 0;
+ void				C_4JProfile::Initialise( DWORD dwTitleID,
+ 								DWORD dwOfferID,
+ 								unsigned short usProfileVersion,
+@@ -726,43 +452,16 @@ void				C_4JProfile::SetTrialTextStringTable(CXuiStringTable *pStringTable,int i
+ void				C_4JProfile::SetTrialAwardText(eAwardType AwardType,int iTitle,int iText) {}
+ int					C_4JProfile::GetLockedProfile() { return 0; }
+ void				C_4JProfile::SetLockedProfile(int iProf) {}
+-bool				C_4JProfile::IsSignedIn(int iQuadrant)
+-{
+-	if(iQuadrant < 0 || iQuadrant >= (int)XUSER_MAX_COUNT)
+-	{
+-		return false;
+-	}
+-
+-	if(iQuadrant == 0)
+-	{
+-		return true;
+-	}
+-
+-	return InputManager.IsPadConnected(iQuadrant);
+-}
+-bool				C_4JProfile::IsSignedInLive(int iProf) { return IsSignedIn(iProf); }
++bool				C_4JProfile::IsSignedIn(int iQuadrant) { return ( iQuadrant == 0); }
++bool				C_4JProfile::IsSignedInLive(int iProf) { return true; }
+ bool				C_4JProfile::IsGuest(int iQuadrant) { return false; }
+ UINT				C_4JProfile::RequestSignInUI(bool bFromInvite,bool bLocalGame,bool bNoGuestsAllowed,bool bMultiplayerSignIn,bool bAddUser, int( *Func)(LPVOID,const bool, const int iPad),LPVOID lpParam,int iQuadrant) { return 0; }
+ UINT				C_4JProfile::DisplayOfflineProfile(int( *Func)(LPVOID,const bool, const int iPad),LPVOID lpParam,int iQuadrant)  { return 0; }
+ UINT				C_4JProfile::RequestConvertOfflineToGuestUI(int( *Func)(LPVOID,const bool, const int iPad),LPVOID lpParam,int iQuadrant) { return 0; }
+ void				C_4JProfile::SetPrimaryPlayerChanged(bool bVal) {}
+ bool				C_4JProfile::QuerySigninStatus(void) { return true; }
+-void				C_4JProfile::GetXUID(int iPad, PlayerUID *pXuid,bool bOnlineXuid)
+-{
+-	EnsureStubIdentity();
+-	if(pXuid == NULL)
+-	{
+-		return;
+-	}
+-
+-	ULONGLONG value = s_stubXuidBase + (ULONGLONG)(iPad & 0x0F);
+-	if(bOnlineXuid)
+-	{
+-		value |= 0x100000000ULL;
+-	}
+-	*pXuid = value;
+-}
+-BOOL				C_4JProfile::AreXUIDSEqual(PlayerUID xuid1,PlayerUID xuid2) { return xuid1 == xuid2; }
++void				C_4JProfile::GetXUID(int iPad, PlayerUID *pXuid,bool bOnlineXuid) {*pXuid = 0xe000d45248242f2e; }
++BOOL				C_4JProfile::AreXUIDSEqual(PlayerUID xuid1,PlayerUID xuid2) { return false; }
+ BOOL				C_4JProfile::XUIDIsGuest(PlayerUID xuid) { return false; }
+ bool				C_4JProfile::AllowedToPlayMultiplayer(int iProf) { return true; }
+ 
+@@ -781,43 +480,15 @@ void				C_4JProfile::AllowedPlayerCreatedContent(int iPad, bool thisQuadrantOnly
+ BOOL				C_4JProfile::CanViewPlayerCreatedContent(int iPad, bool thisQuadrantOnly, PPlayerUID pXuids, DWORD dwXuidCount ) { return true; }
+ bool				C_4JProfile::GetProfileAvatar(int iPad,int( *Func)(LPVOID lpParam,PBYTE pbThumbnail,DWORD dwThumbnailBytes), LPVOID lpParam) { return false; }
+ void				C_4JProfile::CancelProfileAvatarRequest() {}
+-int					C_4JProfile::GetPrimaryPad() { return s_iPrimaryPad; }
+-void				C_4JProfile::SetPrimaryPad(int iPad)
+-{
+-	if(iPad >= 0 && iPad < (int)XUSER_MAX_COUNT && IsSignedIn(iPad))
+-	{
+-		s_iPrimaryPad = iPad;
+-	}
+-	else
+-	{
+-		s_iPrimaryPad = 0;
+-	}
+-}
++int					C_4JProfile::GetPrimaryPad() { return 0; }
++void				C_4JProfile::SetPrimaryPad(int iPad) {}
+ #ifdef _DURANGO
+ char fakeGamerTag[32] = "PlayerName";
+ void				SetFakeGamertag(char *name){ strcpy_s(fakeGamerTag, name); }
+ char*				C_4JProfile::GetGamertag(int iPad){ return fakeGamerTag; }
+ #else
+-char*				C_4JProfile::GetGamertag(int iPad)
+-{
+-	EnsureStubIdentity();
+-	if(iPad < 0 || iPad >= (int)XUSER_MAX_COUNT)
+-	{
+-		iPad = 0;
+-	}
+-	return s_stubGamertagA[iPad];
+-}
+-wstring				C_4JProfile::GetDisplayName(int iPad)
+-{
+-	EnsureStubIdentity();
+-	if(iPad < 0 || iPad >= (int)XUSER_MAX_COUNT)
+-	{
+-		iPad = 0;
+-	}
+-	wchar_t displayName[32];
+-	swprintf(displayName, 32, L"%S", s_stubGamertagA[iPad]);
+-	return displayName;
+-}
++char*				C_4JProfile::GetGamertag(int iPad){ return "PlayerName"; }
++wstring				C_4JProfile::GetDisplayName(int iPad){ return L"PlayerName"; }
+ #endif
+ bool				C_4JProfile::IsFullVersion() { return s_bProfileIsFullVersion; }
+ void				C_4JProfile::SetSignInChangeCallback(void ( *Func)(LPVOID, bool, unsigned int),LPVOID lpParam) {}
+diff --git a/Minecraft.Client/JoinMultiplayerScreen.cpp b/Minecraft.Client/JoinMultiplayerScreen.cpp
+index f85e7643..a98e7bee 100644
+--- a/Minecraft.Client/JoinMultiplayerScreen.cpp
++++ b/Minecraft.Client/JoinMultiplayerScreen.cpp
+@@ -3,7 +3,6 @@
+ #include "Button.h"
+ #include "EditBox.h"
+ #include "Options.h"
+-#include "ConnectScreen.h"
+ #include "..\Minecraft.World\net.minecraft.locale.h"
+ 
+ JoinMultiplayerScreen::JoinMultiplayerScreen(Screen *lastScreen)
+@@ -53,7 +52,7 @@ void JoinMultiplayerScreen::buttonClicked(Button *button)
+         minecraft->options->lastMpIp = replaceAll(ip,L":", L"_");
+         minecraft->options->save();
+ 
+-        vector<wstring> parts = stringSplit(ip,L':');
++        vector<wstring> parts = stringSplit(ip,L'L');
+         if (ip[0]==L'[')
+ 		{
+             int pos = (int)ip.find(L"]");
+@@ -82,7 +81,8 @@ void JoinMultiplayerScreen::buttonClicked(Button *button)
+ 			parts.push_back(ip);
+         }
+ 
+-		minecraft->setScreen(new ConnectScreen(minecraft, parts[0], parts.size() > 1 ? parseInt(parts[1], 25565) : 25565));
++		// 4J - TODO
++//        minecraft->setScreen(new ConnectScreen(minecraft, parts[0], parts.length > 1 ? parseInt(parts[1], 25565) : 25565));
+     }
+ }
+ 
+@@ -125,4 +125,4 @@ void JoinMultiplayerScreen::render(int xm, int ym, float a)
+ 
+     Screen::render(xm, ym, a);
+ 
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.Client/Minecraft.Client.vcxproj b/Minecraft.Client/Minecraft.Client.vcxproj
+index eb18c99b..83c0671b 100644
+--- a/Minecraft.Client/Minecraft.Client.vcxproj
++++ b/Minecraft.Client/Minecraft.Client.vcxproj
+@@ -24395,7 +24395,10 @@ xcopy /q /y /i /s /e $(ProjectDir)Durango\CU  $(LayoutDir)Image\Loose\CU</Comman
+     <ClCompile Include="CompassTexture.cpp" />
+     <ClCompile Include="ConfirmScreen.cpp" />
+     <ClCompile Include="ConnectScreen.cpp">
++      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Durango'">true</ExcludedFromBuild>
++      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
++      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='ContentPackage_Vita|x64'">true</ExcludedFromBuild>
+       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Durango'">true</ExcludedFromBuild>
+       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='ContentPackage_Vita|Durango'">true</ExcludedFromBuild>
+     </ClCompile>
+@@ -36745,4 +36748,4 @@ xcopy /q /y /i /s /e $(ProjectDir)Durango\CU  $(LayoutDir)Image\Loose\CU</Comman
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+   <ImportGroup Label="ExtensionTargets">
+   </ImportGroup>
+-</Project>
++</Project>
+\ No newline at end of file
+diff --git a/Minecraft.Client/Minecraft.cpp b/Minecraft.Client/Minecraft.cpp
+index 678e3106..1892fb36 100644
+--- a/Minecraft.Client/Minecraft.cpp
++++ b/Minecraft.Client/Minecraft.cpp
+@@ -27,7 +27,6 @@
+ #include "DeathScreen.h"
+ #include "ErrorScreen.h"
+ #include "TitleScreen.h"
+-#include "ConnectScreen.h"
+ #include "InventoryScreen.h"
+ #include "InBedChatScreen.h"
+ #include "AchievementPopup.h"
+@@ -89,15 +88,6 @@ int Minecraft::frameTimePos = 0;
+ __int64 Minecraft::warezTime = 0;
+ File Minecraft::workDir = File(L"");
+ 
+-#if defined(__PS3__)
+-#ifndef PS3_BOOT_DIRECT_CONNECT_HOST
+-#define PS3_BOOT_DIRECT_CONNECT_HOST L""
+-#endif
+-#ifndef PS3_BOOT_DIRECT_CONNECT_PORT
+-#define PS3_BOOT_DIRECT_CONNECT_PORT 25565
+-#endif
+-#endif
+-
+ #ifdef __PSVITA__
+ 
+ TOUCHSCREENRECT QuickSelectRect[3]=
+@@ -416,27 +406,9 @@ void Minecraft::init()
+ 	MemSect(0);
+ 	gui = new Gui(this);
+ 
+-	#if defined(__PS3__)
+-	if(connectToIp.empty())
+-	{
+-		const wchar_t *bootDirectHost = PS3_BOOT_DIRECT_CONNECT_HOST;
+-		if(bootDirectHost != NULL && bootDirectHost[0] != L'\0')
+-		{
+-			connectToIp = bootDirectHost;
+-			connectToPort = PS3_BOOT_DIRECT_CONNECT_PORT;
+-			app.DebugPrintf("PS3 boot direct connect target %ls:%d\n", connectToIp.c_str(), connectToPort);
+-		}
+-	}
+-	#endif
+-
+ 	if (connectToIp != L"")	// 4J - was NULL comparison
+ 	{
+-		int connectPort = connectToPort;
+-		if(connectPort <= 0 || connectPort > 65535)
+-		{
+-			connectPort = 25565;
+-		}
+-		setScreen(new ConnectScreen(this, connectToIp, connectPort));
++		//        setScreen(new ConnectScreen(this, connectToIp, connectToPort));		// 4J TODO - put back in
+ 	}
+ 	else
+ 	{
+@@ -1746,7 +1718,6 @@ void Minecraft::run_middle()
+ 				ticks++;
+ 				//            try {		// 4J - try/catch removed
+ 				bool bFirst = true;
+-				bool bTickedAnyLocalPlayer = false;
+ 				for( int idx = 0; idx < XUSER_MAX_COUNT; idx++ )
+ 				{
+ 					// 4J - If we are waiting for this connection to do something, then tick it here.
+@@ -1791,24 +1762,11 @@ void Minecraft::run_middle()
+ 					{
+ 						tick(bFirst, bLastTimerTick);
+ 						bFirst = false;
+-						bTickedAnyLocalPlayer = true;
+ 						// clear the stored button downs since the tick for this player will now have actioned them
+ 						player->ullButtonsPressed=0LL;
+ 					}
+ 				}
+ 
+-				// Menus can run with no local players, so ConnectScreen must be ticked here
+-				// or direct TCP joins will send PreLogin but never process the response.
+-				if(!bTickedAnyLocalPlayer && screen != NULL && dynamic_cast<ConnectScreen *>(screen) != NULL)
+-				{
+-					screen->updateEvents();
+-					if(screen != NULL)
+-					{
+-						screen->particles->tick();
+-						screen->tick();
+-					}
+-				}
+-
+ 				ui.HandleGameTick();
+ 
+ 				setLocalPlayerIdx(ProfileManager.GetPrimaryPad());
+@@ -4925,3 +4883,4 @@ int Minecraft::MustSignInReturnedPSN(void *pParam, int iPad, C4JStorage::EMessag
+     return 0;
+ }
+ #endif
++
+diff --git a/Minecraft.Client/MinecraftServer.cpp b/Minecraft.Client/MinecraftServer.cpp
+index 060abaea..ceb9554b 100644
+--- a/Minecraft.Client/MinecraftServer.cpp
++++ b/Minecraft.Client/MinecraftServer.cpp
+@@ -2,8 +2,6 @@
+ //#include "Minecraft.h"
+ 
+ #include <ctime>
+-#include <climits>
+-#include <cwchar>
+ 
+ #include "Options.h"
+ #include "MinecraftServer.h"
+@@ -33,12 +31,8 @@
+ #include "..\Minecraft.World\ConsoleSaveFileOriginal.h"
+ #include "..\Minecraft.World\Socket.h"
+ #include "..\Minecraft.World\net.minecraft.world.entity.h"
+-#include "..\Minecraft.World\net.minecraft.world.entity.player.h"
+-#include "..\Minecraft.World\net.minecraft.world.damagesource.h"
+-#include "..\Minecraft.World\net.minecraft.world.item.h"
+ #include "ProgressRenderer.h"
+ #include "ServerPlayer.h"
+-#include "PlayerConnection.h"
+ #include "GameRenderer.h"
+ #include "..\Minecraft.World\ThreadName.h"
+ #include "..\Minecraft.World\IntCache.h"
+@@ -72,143 +66,6 @@ bool MinecraftServer::s_slowQueuePacketSent = false;
+ 
+ unordered_map<wstring, int> MinecraftServer::ironTimers;
+ 
+-namespace
+-{
+-	static void consolePrintLine(const wstring& message)
+-	{
+-		printf("%ls\n", message.c_str());
+-		fflush(stdout);
+-	}
+-
+-	static vector<wstring> splitConsoleCommand(const wstring& line)
+-	{
+-		vector<wstring> tokens;
+-		wstring current;
+-		wchar_t quote = 0;
+-
+-		for (size_t i = 0; i < line.size(); ++i)
+-		{
+-			const wchar_t c = line[i];
+-			if (quote != 0)
+-			{
+-				if (c == quote)
+-				{
+-					quote = 0;
+-				}
+-				else
+-				{
+-					current += c;
+-				}
+-				continue;
+-			}
+-
+-			if (c == L'"' || c == L'\'')
+-			{
+-				quote = c;
+-				continue;
+-			}
+-
+-			if (c == L' ' || c == L'\t')
+-			{
+-				if (!current.empty())
+-				{
+-					tokens.push_back(current);
+-					current.clear();
+-				}
+-				continue;
+-			}
+-
+-			current += c;
+-		}
+-
+-		if (!current.empty())
+-		{
+-			tokens.push_back(current);
+-		}
+-
+-		return tokens;
+-	}
+-
+-	static wstring joinTokensFromIndex(const vector<wstring>& tokens, size_t startIndex)
+-	{
+-		wstring output;
+-		for (size_t i = startIndex; i < tokens.size(); ++i)
+-		{
+-			if (!output.empty())
+-			{
+-				output += L" ";
+-			}
+-			output += tokens[i];
+-		}
+-		return output;
+-	}
+-
+-	static bool tryParseInt(const wstring& text, int& value)
+-	{
+-		if (text.empty())
+-		{
+-			return false;
+-		}
+-
+-		wchar_t* parseEnd = NULL;
+-		long parsedValue = wcstol(text.c_str(), &parseEnd, 10);
+-		if (parseEnd == text.c_str() || *parseEnd != 0)
+-		{
+-			return false;
+-		}
+-		if (parsedValue < INT_MIN || parsedValue > INT_MAX)
+-		{
+-			return false;
+-		}
+-
+-		value = (int)parsedValue;
+-		return true;
+-	}
+-
+-	static shared_ptr<ServerPlayer> findPlayerByName(PlayerList* playerList, const wstring& playerName)
+-	{
+-		if (playerList == NULL)
+-		{
+-			return nullptr;
+-		}
+-
+-		shared_ptr<ServerPlayer> exactMatch = playerList->getPlayer(playerName);
+-		if (exactMatch != NULL)
+-		{
+-			return exactMatch;
+-		}
+-
+-		for (size_t i = 0; i < playerList->players.size(); ++i)
+-		{
+-			shared_ptr<ServerPlayer> player = playerList->players[i];
+-			if (player != NULL && equalsIgnoreCase(player->name, playerName))
+-			{
+-				return player;
+-			}
+-		}
+-
+-		return nullptr;
+-	}
+-
+-	static GameType* parseGameTypeToken(const wstring& rawToken)
+-	{
+-		const wstring token = toLower(rawToken);
+-		if (token == L"0" || token == L"s" || token == L"survival")
+-		{
+-			return GameType::SURVIVAL;
+-		}
+-		if (token == L"1" || token == L"c" || token == L"creative")
+-		{
+-			return GameType::CREATIVE;
+-		}
+-		if (token == L"2" || token == L"a" || token == L"adventure")
+-		{
+-			return GameType::ADVENTURE;
+-		}
+-		return NULL;
+-	}
+-}
+-
+ MinecraftServer::MinecraftServer()
+ {
+ 	// 4J - added initialisers
+@@ -234,21 +91,12 @@ MinecraftServer::MinecraftServer()
+ 	m_texturePackId = 0;
+ 	maxBuildHeight = Level::maxBuildHeight;
+ 	m_postUpdateThread = NULL;
+-	InitializeCriticalSection(&m_consoleInputCS);
+ 
+ 	commandDispatcher = new ServerCommandDispatcher();
+ }
+ 
+ MinecraftServer::~MinecraftServer()
+ {
+-	EnterCriticalSection(&m_consoleInputCS);
+-	for (size_t i = 0; i < consoleInput.size(); ++i)
+-	{
+-		delete consoleInput[i];
+-	}
+-	consoleInput.clear();
+-	LeaveCriticalSection(&m_consoleInputCS);
+-	DeleteCriticalSection(&m_consoleInputCS);
+ }
+ 
+ bool MinecraftServer::initServer(__int64 seed, NetworkGameInitData *initData, DWORD initSettings, bool findSeed)
+@@ -297,21 +145,15 @@ bool MinecraftServer::initServer(__int64 seed, NetworkGameInitData *initData, DW
+ 		// TODO 4J Stu - Init a load of settings based on data passed as params
+ 		//settings->setBooleanAndSave( L"host-friends-only", (app.GetGameHostOption(eGameHostOption_FriendsOfFriends)>0) );
+ 
+-		const wstring localIp = settings->getString(L"server-ip", L"");
+-		int port = settings->getInt(L"server-port", DEFAULT_MINECRAFT_PORT);
+-		if (port <= 0 || port > 65535)
+-		{
+-			port = DEFAULT_MINECRAFT_PORT;
+-		}
+-		app.DebugPrintf("ServerSettings: bind-address is %ls:%d\n", localIp.empty() ? L"*" : localIp.c_str(), port);
+-
++		// 4J - Unused
++        //localIp = settings->getString(L"server-ip", L"");
+         //onlineMode = settings->getBoolean(L"online-mode", true);
+ 		//motd = settings->getString(L"motd", L"A Minecraft Server");
++        //motd.replace('§', '$');
+ 
+         setAnimals(settings->getBoolean(L"spawn-animals", true));
+ 		setNpcsEnabled(settings->getBoolean(L"spawn-npcs", true));
+-		setPvpAllowed(settings->getBoolean(L"pvp", app.GetGameHostOption(eGameHostOption_PvP) > 0));
+-		app.SetGameHostOption(eGameHostOption_PvP, isPvpAllowed() ? 1 : 0);
++		setPvpAllowed(app.GetGameHostOption( eGameHostOption_PvP )>0?true:false); // settings->getBoolean(L"pvp", true);
+ 
+ 		// 4J Stu - We should never have hacked clients flying when they shouldn't be like the PC version, so enable flying always
+ 		// Fix for #46612 - TU5: Code: Multiplayer: A client can be banned for flying when accidentaly being blown by dynamite
+@@ -325,7 +167,6 @@ bool MinecraftServer::initServer(__int64 seed, NetworkGameInitData *initData, DW
+ #if 1
+ 		connection = new ServerConnection(this);
+ 		Socket::Initialise(connection);	// 4J - added
+-		Socket::StartTcpServerListener(localIp, port);
+ #else
+ 		// 4J - removed
+         InetAddress localAddress = null;
+@@ -1024,7 +865,6 @@ bool MinecraftServer::IsSuspending()
+ 
+ void MinecraftServer::stopServer()
+ {
+-	Socket::StopTcpServerListener();
+ 
+ 	// 4J-PB - need to halt the rendering of the data, since we're about to remove it
+ #ifdef __PS3__
+@@ -1710,426 +1550,17 @@ void MinecraftServer::tick()
+ 
+ void MinecraftServer::handleConsoleInput(const wstring& msg, ConsoleInputSource *source)
+ {
+-	EnterCriticalSection(&m_consoleInputCS);
+ 	consoleInput.push_back(new ConsoleInput(msg, source));
+-	LeaveCriticalSection(&m_consoleInputCS);
+ }
+ 
+ void MinecraftServer::handleConsoleInputs()
+ {
+-    while (true)
++    while (consoleInput.size() > 0)
+ 	{
+-		ConsoleInput *input = NULL;
+-		EnterCriticalSection(&m_consoleInputCS);
+-		if (consoleInput.size() > 0)
+-		{
+-			AUTO_VAR(it, consoleInput.begin());
+-			input = *it;
+-			consoleInput.erase(it);
+-		}
+-		LeaveCriticalSection(&m_consoleInputCS);
+-
+-		if (input == NULL)
+-		{
+-			break;
+-		}
+-
+-		ConsoleInputSource *source = input->source != NULL ? input->source : this;
+-		wstring line = trimString(input->msg);
+-		delete input;
+-
+-		if (line.empty())
+-		{
+-			continue;
+-		}
+-		if (line[0] == L'/')
+-		{
+-			line = trimString(line.substr(1));
+-			if (line.empty())
+-			{
+-				continue;
+-			}
+-		}
+-
+-		vector<wstring> args = splitConsoleCommand(line);
+-		if (args.size() == 0)
+-		{
+-			continue;
+-		}
+-
+-		const wstring command = toLower(args[0]);
+-
+-		if (command == L"help" || command == L"?")
+-		{
+-			source->info(L"Server commands: help, list, say, stop, save-all, give, tp, time, weather, gamemode, defaultgamemode, xp, kill");
+-			continue;
+-		}
+-
+-		if (command == L"stop" || command == L"quit" || command == L"exit")
+-		{
+-			source->info(L"Stopping server...");
+-			MinecraftServer::HaltServer();
+-			continue;
+-		}
+-
+-		if (command == L"list")
+-		{
+-			wstring names = players->getPlayerNames();
+-			if (names.empty())
+-			{
+-				names = L"(none)";
+-			}
+-			source->info(L"There are " + _toString(players->getPlayerCount()) + L"/" + _toString(players->getMaxPlayers()) + L" players online: " + names);
+-			continue;
+-		}
+-
+-		if (command == L"say")
+-		{
+-			if (args.size() < 2)
+-			{
+-				source->warn(L"Usage: say <message>");
+-				continue;
+-			}
+-			const wstring message = joinTokensFromIndex(args, 1);
+-			players->broadcastAll(shared_ptr<ChatPacket>(new ChatPacket(L"[Server] " + message)));
+-			source->info(L"Broadcasted message.");
+-			continue;
+-		}
+-
+-		if (command == L"save-all")
+-		{
+-			source->info(L"Saving the world...");
+-			saveAllChunks();
+-			source->info(L"Save complete.");
+-			continue;
+-		}
+-
+-		if (command == L"give")
+-		{
+-			if (args.size() < 3)
+-			{
+-				source->warn(L"Usage: give <player> <itemId> [count] [data]");
+-				continue;
+-			}
+-
+-			shared_ptr<ServerPlayer> target = findPlayerByName(players, args[1]);
+-			if (target == NULL)
+-			{
+-				source->warn(L"Unknown player: " + args[1]);
+-				continue;
+-			}
+-
+-			int itemId = 0;
+-			if (!tryParseInt(args[2], itemId))
+-			{
+-				source->warn(L"Item id must be a number.");
+-				continue;
+-			}
+-
+-			int amount = 1;
+-			if (args.size() >= 4 && !tryParseInt(args[3], amount))
+-			{
+-				source->warn(L"Item count must be a number.");
+-				continue;
+-			}
+-
+-			int aux = 0;
+-			if (args.size() >= 5 && !tryParseInt(args[4], aux))
+-			{
+-				source->warn(L"Item data value must be a number.");
+-				continue;
+-			}
+-
+-			if (amount <= 0)
+-			{
+-				source->warn(L"Item count must be greater than zero.");
+-				continue;
+-			}
+-			if (itemId <= 0 || itemId >= Item::items.length || Item::items[itemId] == NULL)
+-			{
+-				source->warn(L"Invalid item id: " + args[2]);
+-				continue;
+-			}
+-
+-			target->drop(shared_ptr<ItemInstance>(new ItemInstance(itemId, amount, aux)));
+-			source->info(L"Gave " + _toString(amount) + L"x item " + _toString(itemId) + L" to " + target->name + L".");
+-			continue;
+-		}
+-
+-		if (command == L"tp")
+-		{
+-			if (args.size() < 3)
+-			{
+-				source->warn(L"Usage: tp <player> <target>");
+-				continue;
+-			}
+-
+-			shared_ptr<ServerPlayer> subject = findPlayerByName(players, args[1]);
+-			shared_ptr<ServerPlayer> destination = findPlayerByName(players, args[2]);
+-			if (subject == NULL)
+-			{
+-				source->warn(L"Unknown player: " + args[1]);
+-				continue;
+-			}
+-			if (destination == NULL)
+-			{
+-				source->warn(L"Unknown target player: " + args[2]);
+-				continue;
+-			}
+-			if (subject->level == NULL || destination->level == NULL || subject->level->dimension == NULL || destination->level->dimension == NULL || subject->level->dimension->id != destination->level->dimension->id)
+-			{
+-				source->warn(L"Both players must be in the same dimension.");
+-				continue;
+-			}
+-
+-			subject->ride(nullptr);
+-			subject->connection->teleport(destination->x, destination->y, destination->z, destination->yRot, destination->xRot);
+-			source->info(L"Teleported " + subject->name + L" to " + destination->name + L".");
+-			continue;
+-		}
+-
+-		if (command == L"time")
+-		{
+-			if (args.size() < 3)
+-			{
+-				source->warn(L"Usage: time set <day|night|ticks> OR time add <ticks>");
+-				continue;
+-			}
+-
+-			wstring action = toLower(args[1]);
+-			int amount = 0;
+-
+-			if (action == L"set")
+-			{
+-				wstring value = toLower(args[2]);
+-				if (value == L"day")
+-				{
+-					amount = 0;
+-				}
+-				else if (value == L"night")
+-				{
+-					amount = 12500;
+-				}
+-				else if (!tryParseInt(args[2], amount))
+-				{
+-					source->warn(L"Invalid time value: " + args[2]);
+-					continue;
+-				}
+-
+-				for (unsigned int i = 0; i < levels.length; ++i)
+-				{
+-					if (levels[i] != NULL)
+-					{
+-						levels[i]->setTimeAndAdjustTileTicks(amount);
+-					}
+-				}
+-				source->info(L"Set world time to " + _toString(amount) + L".");
+-				continue;
+-			}
+-
+-			if (action == L"add")
+-			{
+-				if (!tryParseInt(args[2], amount))
+-				{
+-					source->warn(L"Invalid time delta: " + args[2]);
+-					continue;
+-				}
+-
+-				for (unsigned int i = 0; i < levels.length; ++i)
+-				{
+-					if (levels[i] != NULL)
+-					{
+-						levels[i]->setTimeAndAdjustTileTicks(levels[i]->getTime() + amount);
+-					}
+-				}
+-				source->info(L"Added " + _toString(amount) + L" ticks to world time.");
+-				continue;
+-			}
+-
+-			source->warn(L"Usage: time set <day|night|ticks> OR time add <ticks>");
+-			continue;
+-		}
+-
+-		if (command == L"weather")
+-		{
+-			if (levels.length == 0 || levels[0] == NULL)
+-			{
+-				source->warn(L"No active world loaded.");
+-				continue;
+-			}
+-			if (args.size() < 2)
+-			{
+-				source->warn(L"Usage: weather <clear|rain|thunder>");
+-				continue;
+-			}
+-
+-			ServerLevel *overworld = levels[0];
+-			LevelData *levelData = overworld->getLevelData();
+-			const bool wasRaining = overworld->isRaining();
+-
+-			const int minRain = Level::TICKS_PER_DAY / 2;
+-			const int maxRain = Level::TICKS_PER_DAY * 7;
+-			const int minThunder = SharedConstants::TICKS_PER_SECOND * 60 * 3;
+-			const int maxThunder = SharedConstants::TICKS_PER_SECOND * 60 * 10;
+-
+-			const wstring weatherMode = toLower(args[1]);
+-			if (weatherMode == L"clear")
+-			{
+-				levelData->setRaining(false);
+-				levelData->setThundering(false);
+-				levelData->setRainTime(overworld->random->nextInt(maxRain) + minRain);
+-				levelData->setThunderTime(overworld->random->nextInt(maxRain) + minRain);
+-				source->info(L"Weather set to clear.");
+-			}
+-			else if (weatherMode == L"rain")
+-			{
+-				levelData->setRaining(true);
+-				levelData->setThundering(false);
+-				levelData->setRainTime(overworld->random->nextInt(minRain) + minRain);
+-				levelData->setThunderTime(overworld->random->nextInt(maxRain) + minRain);
+-				source->info(L"Weather set to rain.");
+-			}
+-			else if (weatherMode == L"thunder")
+-			{
+-				levelData->setRaining(true);
+-				levelData->setThundering(true);
+-				levelData->setRainTime(overworld->random->nextInt(minRain) + minRain);
+-				levelData->setThunderTime(overworld->random->nextInt(maxThunder) + minThunder);
+-				source->info(L"Weather set to thunder.");
+-			}
+-			else
+-			{
+-				source->warn(L"Usage: weather <clear|rain|thunder>");
+-				continue;
+-			}
+-
+-			if (wasRaining != overworld->isRaining())
+-			{
+-				if (overworld->isRaining())
+-				{
+-					players->broadcastAll(shared_ptr<GameEventPacket>(new GameEventPacket(GameEventPacket::START_RAINING, 0)));
+-				}
+-				else
+-				{
+-					players->broadcastAll(shared_ptr<GameEventPacket>(new GameEventPacket(GameEventPacket::STOP_RAINING, 0)));
+-				}
+-			}
+-			continue;
+-		}
+-
+-		if (command == L"gamemode")
+-		{
+-			if (args.size() < 3)
+-			{
+-				source->warn(L"Usage: gamemode <mode> <player>");
+-				continue;
+-			}
+-
+-			GameType *mode = parseGameTypeToken(args[1]);
+-			wstring playerName = args[2];
+-			if (mode == NULL)
+-			{
+-				mode = parseGameTypeToken(args[2]);
+-				playerName = args[1];
+-			}
+-			if (mode == NULL)
+-			{
+-				source->warn(L"Invalid gamemode. Use survival, creative, or adventure.");
+-				continue;
+-			}
+-
+-			shared_ptr<ServerPlayer> target = findPlayerByName(players, playerName);
+-			if (target == NULL)
+-			{
+-				source->warn(L"Unknown player: " + playerName);
+-				continue;
+-			}
+-
+-			target->setGameMode(mode);
+-			source->info(L"Set game mode of " + target->name + L" to " + mode->getName() + L".");
+-			continue;
+-		}
+-
+-		if (command == L"defaultgamemode")
+-		{
+-			if (args.size() < 2)
+-			{
+-				source->warn(L"Usage: defaultgamemode <mode>");
+-				continue;
+-			}
+-
+-			GameType *mode = parseGameTypeToken(args[1]);
+-			if (mode == NULL)
+-			{
+-				source->warn(L"Invalid gamemode. Use survival, creative, or adventure.");
+-				continue;
+-			}
+-
+-			players->setOverrideGameMode(mode);
+-			for (unsigned int i = 0; i < levels.length; ++i)
+-			{
+-				if (levels[i] != NULL)
+-				{
+-					levels[i]->getLevelData()->setGameType(mode);
+-				}
+-			}
+-			source->info(L"Default game mode set to " + mode->getName() + L".");
+-			continue;
+-		}
+-
+-		if (command == L"xp")
+-		{
+-			if (args.size() < 3)
+-			{
+-				source->warn(L"Usage: xp <amount> <player>");
+-				continue;
+-			}
+-
+-			int amount = 0;
+-			if (!tryParseInt(args[1], amount))
+-			{
+-				source->warn(L"XP amount must be a number.");
+-				continue;
+-			}
+-			if (amount < 0)
+-			{
+-				source->warn(L"XP amount must be non-negative.");
+-				continue;
+-			}
+-
+-			shared_ptr<ServerPlayer> target = findPlayerByName(players, args[2]);
+-			if (target == NULL)
+-			{
+-				source->warn(L"Unknown player: " + args[2]);
+-				continue;
+-			}
+-
+-			target->increaseXp(amount);
+-			source->info(L"Gave " + _toString(amount) + L" xp to " + target->name + L".");
+-			continue;
+-		}
+-
+-		if (command == L"kill")
+-		{
+-			if (args.size() < 2)
+-			{
+-				source->warn(L"Usage: kill <player>");
+-				continue;
+-			}
+-
+-			shared_ptr<ServerPlayer> target = findPlayerByName(players, args[1]);
+-			if (target == NULL)
+-			{
+-				source->warn(L"Unknown player: " + args[1]);
+-				continue;
+-			}
+-
+-			target->hurt(DamageSource::outOfWorld, 1000);
+-			source->info(L"Killed " + target->name + L".");
+-			continue;
+-		}
+-
+-		source->warn(L"Unknown command: " + args[0] + L". Type 'help' for server commands.");
++		AUTO_VAR(it, consoleInput.begin());
++        ConsoleInput *input = *it;
++		consoleInput.erase(it);
++//        commands->handleCommand(input);		// 4J - removed - TODO - do we want equivalent of console commands?
+     }
+ }
+ 
+@@ -2147,7 +1578,6 @@ void MinecraftServer::main(__int64 seed, void *lpParameter)
+ 
+ void MinecraftServer::HaltServer(bool bPrimaryPlayerSignedOut)
+ {
+-	Socket::StopTcpServerListener();
+ 	s_bServerHalted = true;
+ 	if( server != NULL )
+ 	{
+@@ -2163,12 +1593,10 @@ File *MinecraftServer::getFile(const wstring& name)
+ 
+ void MinecraftServer::info(const wstring& string)
+ {
+-	consolePrintLine(string);
+ }
+ 
+ void MinecraftServer::warn(const wstring& string)
+ {
+-	consolePrintLine(L"[WARN] " + string);
+ }
+ 
+ wstring MinecraftServer::getConsoleName()
+@@ -2254,4 +1682,4 @@ bool MinecraftServer::flagEntitiesToBeRemoved(unsigned int *flags)
+ 		}
+ 	}
+ 	return removedFound;
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.Client/MinecraftServer.h b/Minecraft.Client/MinecraftServer.h
+index fae0dfca..e61001a3 100644
+--- a/Minecraft.Client/MinecraftServer.h
++++ b/Minecraft.Client/MinecraftServer.h
+@@ -96,10 +96,9 @@ public:
+ 	wstring progressStatus;
+     int progress;
+ private:
+-	//	vector<Tickable *> tickables = new ArrayList<Tickable>();	// 4J - removed
++//	vector<Tickable *> tickables = new ArrayList<Tickable>();	// 4J - removed
+ 	CommandDispatcher *commandDispatcher;
+-	vector<ConsoleInput *> consoleInput;	// 4J - was synchronizedList - TODO - investigate
+-	CRITICAL_SECTION m_consoleInputCS;
++    vector<ConsoleInput *> consoleInput;	// 4J - was synchronizedList - TODO - investigate
+ public:
+     bool onlineMode;
+     bool animals;
+diff --git a/Minecraft.Client/PS3/PS3_Minecraft.cpp b/Minecraft.Client/PS3/PS3_Minecraft.cpp
+index b0c38d07..821a47d9 100644
+--- a/Minecraft.Client/PS3/PS3_Minecraft.cpp
++++ b/Minecraft.Client/PS3/PS3_Minecraft.cpp
+@@ -16,7 +16,7 @@ SYS_PROCESS_PARAM(1001, 0x10000);  // thread priority, and stack size
+ #include <cell/audio.h>
+ #include <sysutil/sysutil_gamecontent.h>
+ //#include <sysutil/sysutil_screenshot.h>
+-#include "../GuiParticles.h"
++
+ #include "Leaderboards\PS3LeaderboardManager.h"
+ #include "PS3\PS3Extras\PS3Strings.h"
+ #include "PS3\PS3Extras\ShutdownManager.h"
+@@ -88,14 +88,6 @@ char secureFileId[CELL_SAVEDATA_SECUREFILEID_SIZE] =
+ #include "..\..\Minecraft.Client\Options.h"
+ #include "Sentient\SentientManager.h"
+ #include "..\..\Minecraft.World\IntCache.h"
+-
+-#ifndef PS3_BOOT_DIRECT_CONNECT_HOST
+-#define PS3_BOOT_DIRECT_CONNECT_HOST L""
+-#endif
+-
+-#ifndef PS3_BOOT_DIRECT_CONNECT_PORT
+-#define PS3_BOOT_DIRECT_CONNECT_PORT 25565
+-#endif
+ #include "..\Textures.h"
+ #include "Resource.h"
+ #include "..\..\Minecraft.World\compression.h"
+@@ -969,10 +961,10 @@ int main()
+ 	}
+ 	else
+ 	{
+-		StorageManager.SetGameSaveFolderTitle((WCHAR *)app.GetString(IDS_GAMENAME));//"Minecraft: PlayStationï¿½3 Edition");//GAMENAME);
++		StorageManager.SetGameSaveFolderTitle((WCHAR *)app.GetString(IDS_GAMENAME));//"Minecraft: PlayStation®3 Edition");//GAMENAME);
+ 	}
+-	StorageManager.SetSaveCacheFolderTitle((WCHAR *)app.GetString(IDS_SAVECACHEFILE));//"Minecraft: PlayStationï¿½3 Edition");//GAMENAME);
+-	StorageManager.SetOptionsFolderTitle((WCHAR *)app.GetString(IDS_OPTIONSFILE));//"Minecraft: PlayStationï¿½3 Edition");//GAMENAME);
++	StorageManager.SetSaveCacheFolderTitle((WCHAR *)app.GetString(IDS_SAVECACHEFILE));//"Minecraft: PlayStation®3 Edition");//GAMENAME);
++	StorageManager.SetOptionsFolderTitle((WCHAR *)app.GetString(IDS_OPTIONSFILE));//"Minecraft: PlayStation®3 Edition");//GAMENAME);
+ 	StorageManager.SetGameSaveFolderPrefix(app.GetSaveFolderPrefix());
+ 	StorageManager.SetMaxSaves(99);
+ 	byteArray baOptionsIcon = app.getArchiveFile(L"DefaultOptionsImage320x176.png");
+@@ -1029,13 +1021,6 @@ int main()
+ 
+ 	Minecraft::main();
+ 	Minecraft *pMinecraft=Minecraft::GetInstance();
+-	const wchar_t *bootDirectConnectHost = PS3_BOOT_DIRECT_CONNECT_HOST;
+-	const bool runBootDirectConnect = (bootDirectConnectHost != NULL && bootDirectConnectHost[0] != L'\0');
+-	if(runBootDirectConnect)
+-	{
+-		app.DebugPrintf("PS3 boot direct connect configured for %ls:%d\n", bootDirectConnectHost, PS3_BOOT_DIRECT_CONNECT_PORT);
+-		ui.CloseAllPlayersScenes();
+-	}
+ 
+ 	app.InitGameSettings(); // - allocates the memory for the game settings
+ 	// read the options here for controller 0 - this won't actually be actioned until a storagemanager tick later
+@@ -1216,22 +1201,6 @@ int main()
+ 			MemSect(0);
+ 			pMinecraft->textures->tick(true,false);
+ 			IntCache::Reset();
+-			Screen *activeScreen = pMinecraft->getScreen();
+-			ConnectScreen *connectScreen = dynamic_cast<ConnectScreen *>(activeScreen);
+-			if(connectScreen != NULL)
+-			{
+-				// PS3 menus do not run through run_middle(), so tick legacy ConnectScreen here.
+-				connectScreen->updateEvents();
+-				if(pMinecraft->getScreen() != NULL)
+-				{
+-					if(pMinecraft->getScreen()->particles != NULL)
+-					{
+-						pMinecraft->getScreen()->particles->tick();
+-					}
+-					pMinecraft->getScreen()->tick();
+-				}
+-				pMinecraft->tickAllConnections();
+-			}
+ 			if( app.GetReallyChangingSessionType() )
+ 			{
+ 				pMinecraft->tickAllConnections();		// Added to stop timing out when we are waiting after converting to an offline game
+@@ -1605,4 +1574,4 @@ void MemPixStuff()
+ 
+ #endif
+ 
+-#endif // __PS3__
++#endif // __PS3__
+\ No newline at end of file
+diff --git a/Minecraft.Client/PendingConnection.cpp b/Minecraft.Client/PendingConnection.cpp
+index b6c4cfe9..841863b6 100644
+--- a/Minecraft.Client/PendingConnection.cpp
++++ b/Minecraft.Client/PendingConnection.cpp
+@@ -71,7 +71,6 @@ void PendingConnection::disconnect(DisconnectPacket::eDisconnectReason reason)
+ 
+ void PendingConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
+ {
+-	app.DebugPrintf("Server received PreLogin: netVersion=%d loginKey='%ls'\n", packet->m_netcodeVersion, packet->loginKey.c_str());
+     if (packet->m_netcodeVersion != MINECRAFT_NET_VERSION)
+ 	{
+ 		app.DebugPrintf("Netcode version is %d not equal to %d\n", packet->m_netcodeVersion, MINECRAFT_NET_VERSION);
+@@ -87,12 +86,7 @@ void PendingConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
+     }
+ //	printf("Server: handlePreLogin\n");
+ 	name = packet->loginKey; // 4J Stu - Change from the login packet as we know better on client end during the pre-login packet
+-	if(connection != NULL && connection->getSocket() != NULL)
+-	{
+-		connection->getSocket()->setDirectPlayerOnlineName(name);
+-	}
+ 	sendPreLoginResponse();
+-	app.DebugPrintf("Server sending PreLogin response for '%ls'\n", name.c_str());
+ }
+ 
+ void PendingConnection::sendPreLoginResponse()
+@@ -272,4 +266,4 @@ wstring PendingConnection::getName()
+ bool PendingConnection::isServerPacketListener()
+ {
+ 	return true;
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.Client/ServerPlayer.cpp b/Minecraft.Client/ServerPlayer.cpp
+index d670e7a4..489e6f34 100644
+--- a/Minecraft.Client/ServerPlayer.cpp
++++ b/Minecraft.Client/ServerPlayer.cpp
+@@ -109,9 +109,6 @@ ServerPlayer::ServerPlayer(MinecraftServer *server, Level *level, const wstring&
+ 
+ 	// 4J Added
+ 	lastBrupSendTickCount = 0;
+-	// Force initial BRUP transmission on join/rejoin. This recovers from stale
+-	// per-system chunk flags that can otherwise leave only the spawn chunk visible.
+-	m_forceChunkResendCount = 2048;
+ }
+ 
+ ServerPlayer::~ServerPlayer()
+@@ -323,7 +320,7 @@ void ServerPlayer::doChunkSendingTick(bool dontDelayChunks)
+ 		for( AUTO_VAR(it, chunksToSend.begin()); it != chunksToSend.end(); it++ )
+ 		{
+             ChunkPos chunk = *it;
+-			if( (m_forceChunkResendCount > 0) || level->isChunkFinalised(chunk.x, chunk.z) )
++			if( level->isChunkFinalised(chunk.x, chunk.z) )
+ 			{
+ 				double newDist = chunk.distanceToSqr(x, z);
+ 				if ( (!nearestValid) || (newDist < dist) )
+@@ -355,7 +352,7 @@ void ServerPlayer::doChunkSendingTick(bool dontDelayChunks)
+ //					g_NetworkManager.GetHostPlayer()->GetSendQueueSizeBytes( NULL, true ),
+ //					connection->done);
+ 	
+-				if( dontDelayChunks || ((m_forceChunkResendCount > 0) && !connection->done) || 
++				if( dontDelayChunks || 
+ 					(canSendOnSlowQueue &&
+ 					(connection->countDelayedPackets() < 4 )&&
+ #ifdef _XBOX_ONE
+@@ -401,14 +398,13 @@ void ServerPlayer::doChunkSendingTick(bool dontDelayChunks)
+ 					// (2) Sending a chunk that we've already sent as the player moves around. The original version of the game resends these, since it maintains
+ 					//     a region of active chunks round each player in the "infinite" world, but in our finite world, we don't ever request that chunks be
+ 					//     unloaded on the client and so just gradually build up more and more of the finite set of chunks as the player moves
+-					bool forceChunkResend = (m_forceChunkResendCount > 0);
+-					if( forceChunkResend || !g_NetworkManager.SystemFlagGet(connection->getNetworkPlayer(),flagIndex) )
++					if( !g_NetworkManager.SystemFlagGet(connection->getNetworkPlayer(),flagIndex) )
+ 					{
+ //						app.DebugPrintf("Creating BRUP for %d %d\n",nearest.x, nearest.z);
+ 						PIXBeginNamedEvent(0,"Creation BRUP for sending\n");
+ 						shared_ptr<BlockRegionUpdatePacket> packet = shared_ptr<BlockRegionUpdatePacket>( new BlockRegionUpdatePacket(nearest.x * 16, 0, nearest.z * 16, 16, Level::maxBuildHeight, 16, level) );
+ 						PIXEndNamedEvent();
+-						if( dontDelayChunks || forceChunkResend ) packet->shouldDelay = false;
++						if( dontDelayChunks ) packet->shouldDelay = false;
+ 
+ 						if( packet->shouldDelay == true )
+ 						{
+@@ -424,10 +420,6 @@ void ServerPlayer::doChunkSendingTick(bool dontDelayChunks)
+ 						g_NetworkManager.SystemFlagSet(connection->getNetworkPlayer(),flagIndex);
+ 
+ 						chunkDataSent = true;
+-						if( forceChunkResend )
+-						{
+-							--m_forceChunkResendCount;
+-						}
+ 					}
+ 				}
+ 				else
+diff --git a/Minecraft.Client/ServerPlayer.h b/Minecraft.Client/ServerPlayer.h
+index eb225062..a9b37594 100644
+--- a/Minecraft.Client/ServerPlayer.h
++++ b/Minecraft.Client/ServerPlayer.h
+@@ -37,7 +37,6 @@ private:
+     int invulnerableTime;
+ 	int viewDistance;
+ 	int lastBrupSendTickCount; // 4J Added
+-	int m_forceChunkResendCount; // 4J Added - helps recover from stale per-system chunk flags after reconnect
+ 
+ public:
+ 	ServerPlayer(MinecraftServer *server, Level *level, const wstring& name, ServerPlayerGameMode *gameMode);
+diff --git a/Minecraft.Client/Settings.cpp b/Minecraft.Client/Settings.cpp
+index 18aaea0f..89946773 100644
+--- a/Minecraft.Client/Settings.cpp
++++ b/Minecraft.Client/Settings.cpp
+@@ -1,142 +1,18 @@
+ #include "stdafx.h"
+ #include "Settings.h"
+-#include "..\Minecraft.World\File.h"
+ #include "..\Minecraft.World\StringHelpers.h"
+-#include <algorithm>
+-#include <fstream>
+-#include <sstream>
+-#include <vector>
+-
+-namespace
+-{
+-	string toAscii(const wstring& value)
+-	{
+-		string output;
+-		output.reserve(value.size());
+-		for (size_t i = 0; i < value.size(); ++i)
+-		{
+-			const wchar_t c = value[i];
+-			output.push_back((c >= 0 && c <= 127) ? (char)c : '?');
+-		}
+-		return output;
+-	}
+-}
+ 
++// 4J - TODO - serialise/deserialise from file
+ Settings::Settings(File *file)
+ {
+-	this->file = file;
+-	loadProperties();
+-}
+-
+-Settings::~Settings()
+-{
+-	delete file;
+-	file = NULL;
+-}
+-
+-void Settings::loadProperties()
+-{
+-	if (file == NULL)
+-	{
+-		return;
+-	}
+-
+-	properties.clear();
+-
+-	if (!file->exists())
+-	{
+-		generateNewProperties();
+-		return;
+-	}
+-
+-	const string filePath = toAscii(file->getPath());
+-	ifstream in(filePath.c_str(), ios::in);
+-	if (!in.is_open())
+-	{
+-		return;
+-	}
+-
+-	string line;
+-	while (getline(in, line))
+-	{
+-		if (!line.empty() && line[line.size() - 1] == '\r')
+-		{
+-			line.erase(line.size() - 1);
+-		}
+-
+-		wstring lineWide = trimString(convStringToWstring(line));
+-		if (lineWide.empty() || lineWide[0] == L'#' || lineWide[0] == L'!')
+-		{
+-			continue;
+-		}
+-
+-		size_t splitPos = lineWide.find_first_of(L"=:");
+-		wstring key;
+-		wstring value;
+-		if (splitPos == wstring::npos)
+-		{
+-			key = trimString(lineWide);
+-			value = L"";
+-		}
+-		else
+-		{
+-			key = trimString(lineWide.substr(0, splitPos));
+-			value = trimString(lineWide.substr(splitPos + 1));
+-		}
+-
+-		if (!key.empty())
+-		{
+-			properties[key] = value;
+-		}
+-	}
+-}
+-
+-bool Settings::parseBoolValue(const wstring& value, bool defaultValue)
+-{
+-	const wstring lower = toLower(trimString(value));
+-	if (lower == L"true" || lower == L"1" || lower == L"yes" || lower == L"on")
+-	{
+-		return true;
+-	}
+-	if (lower == L"false" || lower == L"0" || lower == L"no" || lower == L"off")
+-	{
+-		return false;
+-	}
+-	return defaultValue;
+ }
+ 
+ void Settings::generateNewProperties()
+ {
+-	saveProperties();
+ }
+ 
+ void Settings::saveProperties()
+ {
+-	if (file == NULL)
+-	{
+-		return;
+-	}
+-
+-	const string filePath = toAscii(file->getPath());
+-	ofstream out(filePath.c_str(), ios::out | ios::trunc);
+-	if (!out.is_open())
+-	{
+-		return;
+-	}
+-
+-	vector<wstring> keys;
+-	keys.reserve(properties.size());
+-	for (AUTO_VAR(it, properties.begin()); it != properties.end(); ++it)
+-	{
+-		keys.push_back(it->first);
+-	}
+-	sort(keys.begin(), keys.end());
+-
+-	for (size_t i = 0; i < keys.size(); ++i)
+-	{
+-		const wstring& key = keys[i];
+-		out << toAscii(key) << "=" << toAscii(properties[key]) << "\n";
+-	}
+ }
+ 
+ wstring Settings::getString(const wstring& key, const wstring& defaultValue)
+@@ -156,36 +32,24 @@ int Settings::getInt(const wstring& key, int defaultValue)
+ 		properties[key] = _toString<int>(defaultValue);
+ 		saveProperties();
+ 	}
+-
+-	const wstring value = trimString(properties[key]);
+-	wistringstream stream(value);
+-	int parsed = defaultValue;
+-	stream >> parsed;
+-	if (stream.fail() || !stream.eof())
+-	{
+-		properties[key] = _toString<int>(defaultValue);
+-		saveProperties();
+-		return defaultValue;
+-	}
+-
+-	return parsed;
++	return _fromString<int>(properties[key]);
+ }
+ 
+ bool Settings::getBoolean(const wstring& key, bool defaultValue)
+ {
+ 	if(properties.find(key) == properties.end())
+ 	{
+-		properties[key] = defaultValue ? L"true" : L"false";
++		properties[key] = _toString<bool>(defaultValue);
+ 		saveProperties();
+ 	}
+ 	MemSect(35);
+-	bool retval = parseBoolValue(properties[key], defaultValue);
++	bool retval = _fromString<bool>(properties[key]);
+ 	MemSect(0);
+ 	return retval;
+ }
+ 
+ void Settings::setBooleanAndSave(const wstring& key, bool value)
+ {
+-	properties[key] = value ? L"true" : L"false";
++	properties[key] = _toString<bool>(value);
+ 	saveProperties();
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.Client/Settings.h b/Minecraft.Client/Settings.h
+index bfae8967..b6a2c018 100644
+--- a/Minecraft.Client/Settings.h
++++ b/Minecraft.Client/Settings.h
+@@ -7,15 +7,11 @@ class Settings
+ //    public static Logger logger = Logger.getLogger("Minecraft");
+ //    private Properties properties = new Properties();
+ private:
+-	unordered_map<wstring,wstring> properties;
+-	File *file;
+-
+-	void loadProperties();
+-	static bool parseBoolValue(const wstring& value, bool defaultValue);
++	unordered_map<wstring,wstring> properties;	// 4J - TODO was Properties type, will need to implement something we can serialise/deserialise too
++	//File *file;
+ 
+ public:
+ 	Settings(File *file);
+-	~Settings();
+     void generateNewProperties();
+     void saveProperties();
+     wstring getString(const wstring& key, const wstring& defaultValue);
+diff --git a/Minecraft.Client/Windows64/Windows64_App.cpp b/Minecraft.Client/Windows64/Windows64_App.cpp
+index ea53fd3a..ef9f6cf6 100644
+--- a/Minecraft.Client/Windows64/Windows64_App.cpp
++++ b/Minecraft.Client/Windows64/Windows64_App.cpp
+@@ -85,7 +85,7 @@ void CConsoleMinecraftApp::TemporaryCreateGameStart()
+ 	app.SetGameHostOption(eGameHostOption_Gamertags,1);
+ 	app.SetGameHostOption(eGameHostOption_BedrockFog,1);
+ 
+-	app.SetGameHostOption(eGameHostOption_GameType,GameType::SURVIVAL->getId() );
++	app.SetGameHostOption(eGameHostOption_GameType,GameType::CREATIVE->getId() ); // LevelSettings::GAMETYPE_SURVIVAL
+ 	app.SetGameHostOption(eGameHostOption_LevelType, 0 );
+ 	app.SetGameHostOption(eGameHostOption_Structures, 1 );
+ 	app.SetGameHostOption(eGameHostOption_BonusChest, 0 );
+@@ -100,8 +100,6 @@ void CConsoleMinecraftApp::TemporaryCreateGameStart()
+ 
+ 	param->settings = app.GetGameHostOption( eGameHostOption_All );
+ 
+-	// Stub networking requires an explicit host session before spinning the game thread.
+-	g_NetworkManager.HostGame(1, true, false, MINECRAFT_NET_MAX_PLAYERS, 0);
+ 	g_NetworkManager.FakeLocalPlayerJoined();
+ 
+ 	LoadingInputParams *loadingParams = new LoadingInputParams();
+diff --git a/Minecraft.Client/Windows64/Windows64_Minecraft.cpp b/Minecraft.Client/Windows64/Windows64_Minecraft.cpp
+index 4bd364e2..d2251e4e 100644
+--- a/Minecraft.Client/Windows64/Windows64_Minecraft.cpp
++++ b/Minecraft.Client/Windows64/Windows64_Minecraft.cpp
+@@ -4,11 +4,6 @@
+ #include "stdafx.h"
+ 
+ #include <assert.h>
+-#include <algorithm>
+-#include <cctype>
+-#include <iostream>
+-#include <sstream>
+-#include <string>
+ #include "GameConfig\Minecraft.spa.h"
+ #include "..\MinecraftServer.h"
+ #include "..\LocalPlayer.h"
+@@ -28,6 +23,7 @@
+ #include "..\..\Minecraft.World\Socket.h"
+ #include "..\..\Minecraft.World\ThreadName.h"
+ #include "..\..\Minecraft.Client\StatsCounter.h"
++#include "..\ConnectScreen.h"
+ //#include "Social\SocialManager.h"
+ //#include "Leaderboards\LeaderboardManager.h"
+ //#include "XUI\XUI_Scene_Container.h"
+@@ -83,220 +79,6 @@ BOOL g_bWidescreen = TRUE;
+ int g_iScreenWidth = 1920;
+ int g_iScreenHeight = 1080;
+ 
+-static volatile LONG g_serverConsoleInputRunning = 0;
+-
+-static string trimStringA(const string& value)
+-{
+-	size_t begin = 0;
+-	while (begin < value.size() && isspace((unsigned char)value[begin]))
+-	{
+-		++begin;
+-	}
+-
+-	size_t end = value.size();
+-	while (end > begin && isspace((unsigned char)value[end - 1]))
+-	{
+-		--end;
+-	}
+-
+-	return value.substr(begin, end - begin);
+-}
+-
+-static string stripWrappingQuotes(const string& value)
+-{
+-	if(value.size() >= 2)
+-	{
+-		const char first = value[0];
+-		const char last = value[value.size() - 1];
+-		if((first == '"' && last == '"') || (first == '\'' && last == '\''))
+-		{
+-			return value.substr(1, value.size() - 2);
+-		}
+-	}
+-	return value;
+-}
+-
+-static bool shouldRunDedicatedServer(const char* cmdLine)
+-{
+-	if (cmdLine == NULL || cmdLine[0] == '\0')
+-	{
+-		return false;
+-	}
+-
+-	string token;
+-	istringstream args(cmdLine);
+-	while (args >> token)
+-	{
+-		transform(token.begin(), token.end(), token.begin(), ::tolower);
+-		if (token == "-server" || token == "--server" || token == "/server")
+-		{
+-			return true;
+-		}
+-	}
+-
+-	return false;
+-}
+-
+-static bool parseConnectEndpoint(const string& endpoint, string& host, int& port)
+-{
+-	string cleanedEndpoint = trimStringA(stripWrappingQuotes(endpoint));
+-	if(cleanedEndpoint.empty())
+-	{
+-		return false;
+-	}
+-
+-	host = cleanedEndpoint;
+-	port = 25565;
+-
+-	size_t separator = cleanedEndpoint.find_last_of(':');
+-	if(separator == string::npos)
+-	{
+-		return true;
+-	}
+-
+-	const string hostPart = trimStringA(cleanedEndpoint.substr(0, separator));
+-	const string portPart = trimStringA(cleanedEndpoint.substr(separator + 1));
+-	if(hostPart.empty() || portPart.empty())
+-	{
+-		return false;
+-	}
+-
+-	for(size_t i = 0; i < portPart.size(); ++i)
+-	{
+-		if(!isdigit((unsigned char)portPart[i]))
+-		{
+-			return false;
+-		}
+-	}
+-
+-	int parsedPort = atoi(portPart.c_str());
+-	if(parsedPort <= 0 || parsedPort > 65535)
+-	{
+-		return false;
+-	}
+-
+-	host = hostPart;
+-	port = parsedPort;
+-	return true;
+-}
+-
+-static bool tryGetDirectConnectArgs(const char* cmdLine, string& host, int& port)
+-{
+-	if (cmdLine == NULL || cmdLine[0] == '\0')
+-	{
+-		return false;
+-	}
+-
+-	string token;
+-	istringstream args(cmdLine);
+-	while (args >> token)
+-	{
+-		token = stripWrappingQuotes(token);
+-		string compareToken = token;
+-		transform(compareToken.begin(), compareToken.end(), compareToken.begin(), ::tolower);
+-
+-		if(compareToken == "-connect" || compareToken == "--connect" || compareToken == "/connect")
+-		{
+-			string endpoint;
+-			if(!(args >> endpoint))
+-			{
+-				return false;
+-			}
+-			endpoint = stripWrappingQuotes(endpoint);
+-			return parseConnectEndpoint(endpoint, host, port);
+-		}
+-
+-		const string connectPrefixA = "-connect=";
+-		const string connectPrefixB = "--connect=";
+-		if(compareToken.find(connectPrefixA) == 0)
+-		{
+-			return parseConnectEndpoint(token.substr(connectPrefixA.length()), host, port);
+-		}
+-		if(compareToken.find(connectPrefixB) == 0)
+-		{
+-			return parseConnectEndpoint(token.substr(connectPrefixB.length()), host, port);
+-		}
+-	}
+-
+-	return false;
+-}
+-
+-static void queueDedicatedServerConsoleCommand(const string& line)
+-{
+-	if (MinecraftServer::serverHalted())
+-	{
+-		return;
+-	}
+-
+-	MinecraftServer* server = MinecraftServer::getInstance();
+-	if (server == NULL)
+-	{
+-		return;
+-	}
+-
+-	wstring command = trimString(convStringToWstring(line));
+-	if (command.empty())
+-	{
+-		return;
+-	}
+-
+-	server->handleConsoleInput(command, server);
+-}
+-
+-static void prepareDedicatedServerConsole()
+-{
+-	// Always use a dedicated console window for the server instead of reusing
+-	// whatever terminal launched the process.
+-	FreeConsole();
+-	AllocConsole();
+-
+-	FILE* redirected = NULL;
+-	freopen_s(&redirected, "CONIN$", "r", stdin);
+-	freopen_s(&redirected, "CONOUT$", "w", stdout);
+-	freopen_s(&redirected, "CONOUT$", "w", stderr);
+-
+-	setvbuf(stdin, NULL, _IONBF, 0);
+-	setvbuf(stdout, NULL, _IONBF, 0);
+-	setvbuf(stderr, NULL, _IONBF, 0);
+-
+-	HANDLE inputHandle = GetStdHandle(STD_INPUT_HANDLE);
+-	DWORD inputMode = 0;
+-	if (inputHandle != INVALID_HANDLE_VALUE && GetConsoleMode(inputHandle, &inputMode))
+-	{
+-		inputMode |= ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT;
+-		SetConsoleMode(inputHandle, inputMode);
+-	}
+-
+-	SetConsoleTitleA("Minecraft Dedicated Server");
+-}
+-
+-static int ServerConsoleInputThreadProc(void* lpParam)
+-{
+-	UNREFERENCED_PARAMETER(lpParam);
+-
+-	while (InterlockedCompareExchange(&g_serverConsoleInputRunning, 0, 0) != 0)
+-	{
+-		cout << "mc> " << flush;
+-
+-		string line;
+-		if (!getline(cin, line))
+-		{
+-			Sleep(25);
+-			continue;
+-		}
+-
+-		line = trimStringA(line);
+-		if (line.empty())
+-		{
+-			continue;
+-		}
+-
+-		queueDedicatedServerConsoleCommand(line);
+-	}
+-
+-	return 0;
+-}
+-
+ void DefineActions(void)
+ {
+ 	// The app needs to define the actions required, and the possible mappings for these
+@@ -823,18 +605,9 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
+ 					   _In_ int       nCmdShow)
+ {
+ 	UNREFERENCED_PARAMETER(hPrevInstance);
++	UNREFERENCED_PARAMETER(lpCmdLine);
+ 
+-	const bool runDedicatedServer = shouldRunDedicatedServer(lpCmdLine);
+-	string directConnectHost;
+-	int directConnectPort = 25565;
+-	const bool runDirectConnect = !runDedicatedServer && tryGetDirectConnectArgs(lpCmdLine, directConnectHost, directConnectPort);
+-	if (runDedicatedServer)
+-	{
+-		prepareDedicatedServerConsole();
+-		nCmdShow = SW_HIDE;
+-	}
+-
+-	if(lpCmdLine && !runDedicatedServer)
++	if(lpCmdLine)
+ 	{
+ 		if(lpCmdLine[0] == '1')
+ 		{
+@@ -1061,76 +834,6 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
+ 
+ 	app.InitGameSettings();
+ 
+-	if (runDirectConnect && pMinecraft != NULL)
+-	{
+-		app.DebugPrintf("Starting direct connect to %s:%d (IUI flow)\n", directConnectHost.c_str(), directConnectPort);
+-
+-		const int primaryPad = ProfileManager.GetPrimaryPad();
+-		const int localUsersMask = g_NetworkManager.GetLocalPlayerMask(primaryPad);
+-		pMinecraft->clearConnectionFailed();
+-		app.SetTutorialMode(false);
+-		g_NetworkManager.SetLocalGame(false);
+-
+-#ifndef _XBOX
+-		// Ensure the local player wrapper exists before switching to join state.
+-		// If this is done after JoinGameFromInviteInfo in the stub path, a temporary
+-		// non-TCP socket can be created and interfere with the real direct socket.
+-		if(g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad) == NULL)
+-		{
+-			g_NetworkManager.FakeLocalPlayerJoined();
+-		}
+-#endif
+-
+-		if(!g_NetworkManager.JoinGameFromInviteInfo(primaryPad, localUsersMask, NULL))
+-		{
+-			app.DebugPrintf("Failed to enter client session state for direct connect\n");
+-		}
+-
+-		INetworkPlayer *localPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad);
+-		if(localPlayer == NULL)
+-		{
+-			app.DebugPrintf("Direct connect failed: local network player not available\n");
+-		}
+-		else
+-		{
+-				Socket *existingSocket = localPlayer->GetSocket();
+-				if(existingSocket != NULL)
+-				{
+-					// Do not delete here: active Connection instances may still own/use this socket.
+-					if(!existingSocket->close(false))
+-					{
+-						existingSocket->close(true);
+-					}
+-					localPlayer->SetSocket(NULL);
+-				}
+-
+-			Socket *directSocket = new Socket(convStringToWstring(directConnectHost), directConnectPort);
+-			if(!directSocket->createdOk)
+-			{
+-				app.DebugPrintf("Direct connect failed: unable to open TCP socket to %s:%d\n", directConnectHost.c_str(), directConnectPort);
+-				delete directSocket;
+-			}
+-			else
+-			{
+-				localPlayer->SetSocket(directSocket);
+-				directSocket->setPlayer(localPlayer);
+-
+-				LoadingInputParams *loadingParams = new LoadingInputParams();
+-				loadingParams->func = &CGameNetworkManager::RunNetworkGameThreadProc;
+-				loadingParams->lpParam = NULL;
+-
+-				UIFullscreenProgressCompletionData *completionData = new UIFullscreenProgressCompletionData();
+-				completionData->bShowBackground = TRUE;
+-				completionData->bShowLogo = TRUE;
+-				completionData->type = e_ProgressCompletion_CloseAllPlayersUIScenes;
+-				completionData->iPad = DEFAULT_XUI_MENU_USER;
+-				loadingParams->completionData = completionData;
+-
+-				ui.NavigateToScene(primaryPad, eUIScene_FullscreenProgress, loadingParams);
+-			}
+-		}
+-	}
+-
+ #if 0
+ 	//bool bDisplayPauseMenu=false;
+ 
+@@ -1182,31 +885,6 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
+ 	pMinecraft->options->set(Options::Option::MUSIC,1.0f);
+ 	pMinecraft->options->set(Options::Option::SOUND,1.0f);
+ 
+-	if (runDedicatedServer)
+-	{
+-		app.DebugPrintf("Starting dedicated server mode.\n");
+-		app.DebugPrintf("Type 'help' for server commands.\n");
+-		app.TemporaryCreateGameStart();
+-
+-		InterlockedExchange(&g_serverConsoleInputRunning, 1);
+-		C4JThread* consoleThread = new C4JThread(&ServerConsoleInputThreadProc, NULL, "ServerConsole");
+-		consoleThread->Run();
+-
+-		while (!MinecraftServer::serverHalted() && g_NetworkManager.IsInSession())
+-		{
+-			g_NetworkManager.DoWork();
+-			Sleep(50);
+-		}
+-
+-		InterlockedExchange(&g_serverConsoleInputRunning, 0);
+-		MinecraftServer::HaltServer();
+-		g_NetworkManager.LeaveGame(false);
+-
+-		g_NetworkManager.Terminate();
+-		CleanupDevice();
+-		return 0;
+-	}
+-
+ 	//app.TemporaryCreateGameStart();
+ 
+ 	//Sleep(10000);
+@@ -1674,4 +1352,4 @@ void MemPixStuff()
+ 	PIXAddNamedCounter(((float)allSectsTotal)/(4096.0f),"MemSect total pages");
+ }
+ 
+-#endif
++#endif
+\ No newline at end of file
+diff --git a/Minecraft.Client/Windows64/run-server.bat b/Minecraft.Client/Windows64/run-server.bat
+deleted file mode 100644
+index a396fc7a..00000000
+--- a/Minecraft.Client/Windows64/run-server.bat
++++ /dev/null
+@@ -1,23 +0,0 @@
+-@echo off
+-setlocal
+-
+-set "EXE_PATH="
+-for %%P in (
+-	"%~dp0..\..\x64_Release\Minecraft.Client.exe"
+-	"%~dp0..\..\x64\Release\Minecraft.Client.exe"
+-	"%~dp0..\..\Release\Minecraft.Client.exe"
+-) do (
+-	if exist "%%~fP" (
+-		set "EXE_PATH=%%~fP"
+-		goto :found
+-	)
+-)
+-
+-echo Could not find Minecraft.Client.exe.
+-echo Build with configuration "Server|Windows64" first.
+-exit /b 1
+-
+-:found
+-echo Starting dedicated server from "%EXE_PATH%".
+-"%EXE_PATH%" -server %*
+-
+diff --git a/Minecraft.Client/Xbox/Network/NetworkPlayerXbox.cpp b/Minecraft.Client/Xbox/Network/NetworkPlayerXbox.cpp
+index 16317d93..37e24f7a 100644
+--- a/Minecraft.Client/Xbox/Network/NetworkPlayerXbox.cpp
++++ b/Minecraft.Client/Xbox/Network/NetworkPlayerXbox.cpp
+@@ -17,38 +17,26 @@ void NetworkPlayerXbox::SendData(INetworkPlayer *player, const void *pvData, int
+ 	DWORD flags;
+ 	flags = QNET_SENDDATA_RELIABLE | QNET_SENDDATA_SEQUENTIAL;
+ 	if( lowPriority ) flags |= QNET_SENDDATA_LOW_PRIORITY | QNET_SENDDATA_SECONDARY;
+-	NetworkPlayerXbox *networkPlayer = dynamic_cast<NetworkPlayerXbox *>(player);
+-	if(networkPlayer == NULL)
+-	{
+-		return;
+-	}
+-	m_qnetPlayer->SendData(networkPlayer->m_qnetPlayer, pvData, dataSize, flags);
++	m_qnetPlayer->SendData(((NetworkPlayerXbox *)player)->m_qnetPlayer, pvData, dataSize, flags);
+ }
+ 
+ bool NetworkPlayerXbox::IsSameSystem(INetworkPlayer *player)
+ {
+-	NetworkPlayerXbox *networkPlayer = dynamic_cast<NetworkPlayerXbox *>(player);
+-	if(networkPlayer == NULL)
+-	{
+-		return false;
+-	}
+-	return ( m_qnetPlayer->IsSameSystem(networkPlayer->m_qnetPlayer) == TRUE );
++	return ( m_qnetPlayer->IsSameSystem(((NetworkPlayerXbox *)player)->m_qnetPlayer) == TRUE );
+ }
+ 
+ int NetworkPlayerXbox::GetSendQueueSizeBytes( INetworkPlayer *player, bool lowPriority )
+ {
+ 	DWORD flags = QNET_GETSENDQUEUESIZE_BYTES;
+ 	if( lowPriority ) flags |= QNET_GETSENDQUEUESIZE_SECONDARY_TYPE;
+-	NetworkPlayerXbox *networkPlayer = dynamic_cast<NetworkPlayerXbox *>(player);
+-	return m_qnetPlayer->GetSendQueueSize(networkPlayer ? networkPlayer->m_qnetPlayer : NULL , flags);
++	return m_qnetPlayer->GetSendQueueSize(player ? ((NetworkPlayerXbox *)player)->m_qnetPlayer : NULL , flags);
+ }
+ 
+ int NetworkPlayerXbox::GetSendQueueSizeMessages( INetworkPlayer *player, bool lowPriority )
+ {
+ 	DWORD flags = QNET_GETSENDQUEUESIZE_MESSAGES;
+ 	if( lowPriority ) flags |= QNET_GETSENDQUEUESIZE_SECONDARY_TYPE;
+-	NetworkPlayerXbox *networkPlayer = dynamic_cast<NetworkPlayerXbox *>(player);
+-	return m_qnetPlayer->GetSendQueueSize(networkPlayer ? networkPlayer->m_qnetPlayer : NULL , flags);
++	return m_qnetPlayer->GetSendQueueSize(player ? ((NetworkPlayerXbox *)player)->m_qnetPlayer : NULL , flags);
+ }
+ 
+ int NetworkPlayerXbox::GetCurrentRtt()
+@@ -130,3 +118,4 @@ IQNetPlayer *NetworkPlayerXbox::GetQNetPlayer()
+ {
+ 	return m_qnetPlayer;
+ }
++
+diff --git a/Minecraft.World/BlockRegionUpdatePacket.cpp b/Minecraft.World/BlockRegionUpdatePacket.cpp
+index a2e5e6fa..d85321a5 100644
+--- a/Minecraft.World/BlockRegionUpdatePacket.cpp
++++ b/Minecraft.World/BlockRegionUpdatePacket.cpp
+@@ -114,34 +114,18 @@ void BlockRegionUpdatePacket::read(DataInputStream *dis) //throws IOException
+ 
+ 		if( success )
+ 		{
+-			HRESULT decompressResult = Compression::getCompression()->DecompressLZXRLE( buffer.data, &outputSize, compressedBuffer.data, size);
+-			if(decompressResult != S_OK)
+-			{
+-				app.DebugPrintf("BlockRegionUpdatePacket decompress failed for (%d,%d,%d) size=%d\n", x, y, z, size);
+-				delete [] buffer.data;
+-				buffer = byteArray();
+-				outputSize = 0;
+-			}
++			Compression::getCompression()->DecompressLZXRLE( buffer.data, &outputSize, compressedBuffer.data, size);
+ 		}
+ 		else
+ 		{
+ 			app.DebugPrintf("Not decompressing packet that wasn't fully read\n");
+-			delete [] buffer.data;
+-			buffer = byteArray();
+-			outputSize = 0;
+ 		}
+ 
+ 	//	printf("Block (%d %d %d), (%d %d %d) coming in decomp from %d to %d\n",x,y,z,xs,ys,zs,size,outputSize);
+ 	
+ 
+ 		delete [] compressedBuffer.data;
+-		if(buffer.length != outputSize)
+-		{
+-			app.DebugPrintf("BlockRegionUpdatePacket output size mismatch for (%d,%d,%d): expected=%d actual=%d\n",
+-				x, y, z, buffer.length, outputSize);
+-			delete [] buffer.data;
+-			buffer = byteArray();
+-		}
++		assert(buffer.length == outputSize);
+ 	}
+ }
+ 
+@@ -170,3 +154,4 @@ int BlockRegionUpdatePacket::getEstimatedSize()
+ {
+ 	return 17 + size;
+ }
++
+diff --git a/Minecraft.World/BufferedOutputStream.cpp b/Minecraft.World/BufferedOutputStream.cpp
+index 6f22eeef..19fc95af 100644
+--- a/Minecraft.World/BufferedOutputStream.cpp
++++ b/Minecraft.World/BufferedOutputStream.cpp
+@@ -84,9 +84,4 @@ void BufferedOutputStream::write(unsigned int b)
+ 	{
+ 		flush();
+ 	}
+-}
+-
+-bool BufferedOutputStream::isDirectTcpTransport() const
+-{
+-	return stream != NULL && stream->isDirectTcpTransport();
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.World/BufferedOutputStream.h b/Minecraft.World/BufferedOutputStream.h
+index a697f0db..19c79d6c 100644
+--- a/Minecraft.World/BufferedOutputStream.h
++++ b/Minecraft.World/BufferedOutputStream.h
+@@ -20,5 +20,4 @@ public:
+ 	virtual void write(byteArray b, unsigned int offset, unsigned int length);
+ 	virtual void write(byteArray b);
+ 	virtual void write(unsigned int b);
+-	virtual bool isDirectTcpTransport() const;
+-};
++};
+\ No newline at end of file
+diff --git a/Minecraft.World/Connection.cpp b/Minecraft.World/Connection.cpp
+index 470e8e72..4392fe54 100644
+--- a/Minecraft.World/Connection.cpp
++++ b/Minecraft.World/Connection.cpp
+@@ -294,10 +294,6 @@ bool Connection::readTick()
+ 
+ 	if (packet != NULL)
+ 	{
+-		if(socket != NULL && socket->isTcpTransport())
+-		{
+-			// app.DebugPrintf("Direct TCP packet received: id=%d\n", packet->getId());
+-		}
+ 		readSizes[packet->getId()] += packet->getEstimatedSize() + 1;
+ 		EnterCriticalSection(&incoming_cs);
+ 		if(!quitting)
+@@ -460,10 +456,7 @@ void Connection::tick()
+ 	EnterCriticalSection(&incoming_cs);
+ 	// 4J Stu - If disconnected, then we shouldn't process incoming packets
+ 	std::vector< shared_ptr<Packet> > packetsToHandle;
+-	const bool isDirectTcpConnection = (socket != NULL && socket->isTcpTransport());
+-	const bool canProcessIncomingPackets = g_NetworkManager.IsInSession() || isDirectTcpConnection;
+-	const bool canDispatchIncomingPackets = !g_NetworkManager.IsLeavingGame() || isDirectTcpConnection;
+-	while (!disconnected && canDispatchIncomingPackets && canProcessIncomingPackets && !incoming.empty() && max-- >= 0)
++	while (!disconnected && !g_NetworkManager.IsLeavingGame() && g_NetworkManager.IsInSession() && !incoming.empty() && max-- >= 0)
+ 	{
+ 		shared_ptr<Packet> packet = incoming.front();
+ 		packetsToHandle.push_back(packet);
+diff --git a/Minecraft.World/DataInputStream.cpp b/Minecraft.World/DataInputStream.cpp
+index aba866fb..2291bf48 100644
+--- a/Minecraft.World/DataInputStream.cpp
++++ b/Minecraft.World/DataInputStream.cpp
+@@ -3,18 +3,6 @@
+ 
+ #include "DataInputStream.h"
+ 
+-#if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+-static PlayerUID BuildSonyPlayerUidFromPortableDirectTcpId(unsigned long long portableUid)
+-{
+-	PlayerUID result = INVALID_XUID;
+-	if(portableUid != 0ULL)
+-	{
+-		result.setUserID((unsigned int)(portableUid & 0xffffffffULL));
+-	}
+-	return result;
+-}
+-#endif
+-
+ //Creates a DataInputStream that uses the specified underlying InputStream.
+ //Parameters:
+ //in - the specified input stream
+@@ -525,12 +513,6 @@ PlayerUID DataInputStream::readPlayerUID()
+ {
+ 	PlayerUID returnValue;
+ #if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+-	if(stream != NULL && stream->isDirectTcpTransport())
+-	{
+-		unsigned long long portableUid = (unsigned long long)readLong();
+-		return BuildSonyPlayerUidFromPortableDirectTcpId(portableUid);
+-	}
+-
+ 	for(int idPos=0;idPos<sizeof(PlayerUID); idPos++)
+ 		((char*)&returnValue)[idPos] = readByte();
+ #elif defined(_DURANGO)
+@@ -561,4 +543,4 @@ __int64 DataInputStream::skip(__int64 n)
+ int DataInputStream::skipBytes(int n)
+ {
+ 	return skip(n);
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.World/DataOutputStream.cpp b/Minecraft.World/DataOutputStream.cpp
+index 1fde54bc..8e277c23 100644
+--- a/Minecraft.World/DataOutputStream.cpp
++++ b/Minecraft.World/DataOutputStream.cpp
+@@ -3,32 +3,6 @@
+ 
+ #include "DataOutputStream.h"
+ 
+-#if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+-static unsigned long long BuildPortableDirectTcpPlayerUid(const PlayerUID& player)
+-{
+-	if(player == INVALID_XUID)
+-	{
+-		return 0ULL;
+-	}
+-
+-	// Use a stable hash so Sony PlayerUID layouts can be represented in the 64-bit
+-	// wire format used by non-Sony direct TCP builds.
+-	const unsigned char *playerBytes = (const unsigned char *)&player;
+-	unsigned long long hash = 1469598103934665603ULL; // FNV-1a offset basis
+-	for(unsigned int i = 0; i < sizeof(PlayerUID); ++i)
+-	{
+-		hash ^= (unsigned long long)playerBytes[i];
+-		hash *= 1099511628211ULL; // FNV-1a prime
+-	}
+-
+-	if(hash == 0ULL)
+-	{
+-		hash = 1ULL;
+-	}
+-	return hash;
+-}
+-#endif
+-
+ //Creates a new data output stream to write data to the specified underlying output stream. The counter written is set to zero.
+ //Parameters:
+ //out - the underlying output stream, to be saved for later use.
+@@ -284,12 +258,6 @@ void DataOutputStream::writeUTF(const wstring& str)
+ void DataOutputStream::writePlayerUID(PlayerUID player)
+ {
+ #if defined(__PS3__) || defined(__ORBIS__) || defined (__PSVITA__)
+-	if(stream != NULL && stream->isDirectTcpTransport())
+-	{
+-		writeLong((__int64)BuildPortableDirectTcpPlayerUid(player));
+-		return;
+-	}
+-
+ 	for(int idPos=0;idPos<sizeof(PlayerUID); idPos++)
+ 		writeByte(((char*)&player)[idPos]);
+ #elif defined(_DURANGO)
+@@ -297,4 +265,4 @@ void DataOutputStream::writePlayerUID(PlayerUID player)
+ #else
+ 	writeLong(player);
+ #endif // PS3
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.World/InputStream.h b/Minecraft.World/InputStream.h
+index bb92e2e9..af0ff593 100644
+--- a/Minecraft.World/InputStream.h
++++ b/Minecraft.World/InputStream.h
+@@ -12,7 +12,6 @@ public:
+ 	virtual int read(byteArray b, unsigned int offset, unsigned int length) = 0;
+ 	virtual void close() = 0;
+ 	virtual __int64 skip(__int64 n) = 0;
+-	virtual bool isDirectTcpTransport() const { return false; }
+ 
+ 	static InputStream *getResourceAsStream(const wstring &fileName);
+-};
++};
+\ No newline at end of file
+diff --git a/Minecraft.World/OutputStream.h b/Minecraft.World/OutputStream.h
+index eea0eec2..f6d9bcf7 100644
+--- a/Minecraft.World/OutputStream.h
++++ b/Minecraft.World/OutputStream.h
+@@ -11,5 +11,4 @@ public:
+ 	virtual void write(byteArray b, unsigned int offset, unsigned int length) = 0;
+ 	virtual void close() = 0;
+ 	virtual void flush() = 0;
+-	virtual bool isDirectTcpTransport() const { return false; }
+-};
++};
+\ No newline at end of file
+diff --git a/Minecraft.World/PrimedTnt.cpp b/Minecraft.World/PrimedTnt.cpp
+index dec3d6d3..09926d50 100644
+--- a/Minecraft.World/PrimedTnt.cpp
++++ b/Minecraft.World/PrimedTnt.cpp
+@@ -94,7 +94,7 @@ void PrimedTnt::tick()
+ 
+ void PrimedTnt::explode()
+ {
+-	float r = 200.0f;
++	float r = 4.0f;
+ 	level->explode(nullptr, x, y, z, r, true);
+ }
+ 
+diff --git a/Minecraft.World/Socket.cpp b/Minecraft.World/Socket.cpp
+index 1cbbcd0e..4b703403 100644
+--- a/Minecraft.World/Socket.cpp
++++ b/Minecraft.World/Socket.cpp
+@@ -3,255 +3,23 @@
+ #include "SocketAddress.h"
+ #include "Socket.h"
+ #include "ThreadName.h"
+-#include "StringHelpers.h"
+ #include "..\Minecraft.Client\ServerConnection.h"
+ #include <algorithm>
+ #include "..\Minecraft.Client\PS3\PS3Extras\ShutdownManager.h"
+ 
+-#if defined(_WINDOWS64)
+-#include <winsock2.h>
+-#include <ws2tcpip.h>
+-#pragma comment(lib, "Ws2_32.lib")
+-#elif defined(__PS3__)
+-#include <sys/socket.h>
+-#include <sys/select.h>
+-#include <sys/time.h>
+-#include <netinet/in.h>
+-#include <netinet/tcp.h>
+-#include <arpa/inet.h>
+-#include <netdb.h>
+-#include <unistd.h>
+-#include <errno.h>
+-
+-typedef int SOCKET;
+-#ifndef INVALID_SOCKET
+-#define INVALID_SOCKET (-1)
+-#endif
+-#ifndef SOCKET_ERROR
+-#define SOCKET_ERROR (-1)
+-#endif
+-#ifndef SD_BOTH
+-#define SD_BOTH SHUT_RDWR
+-#endif
+-#ifndef SOMAXCONN
+-#define SOMAXCONN 8
+-#endif
+-#ifndef EWOULDBLOCK
+-	#ifdef EAGAIN
+-		#define EWOULDBLOCK EAGAIN
+-	#else
+-		#define EWOULDBLOCK 11
+-	#endif
+-#endif
+-#ifndef WSAEINTR
+-#define WSAEINTR EINTR
+-#endif
+-#ifndef WSAEWOULDBLOCK
+-#define WSAEWOULDBLOCK EWOULDBLOCK
+-#endif
+-
+-static int closesocket(int socketHandle)
+-{
+-	return close(socketHandle);
+-}
+-
+-static int WSAGetLastError()
+-{
+-	return errno;
+-}
+-#endif
+-
+-namespace
+-{
+-const unsigned long long INVALID_NATIVE_SOCKET_HANDLE = ~0ULL;
+-
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-bool ResolveIPv4Address(const char *host, in_addr *address)
+-{
+-	if(host == NULL || host[0] == '\0' || address == NULL)
+-	{
+-		return false;
+-	}
+-
+-	#if defined(_WINDOWS64)
+-	if(inet_pton(AF_INET, host, address) == 1)
+-	{
+-		return true;
+-	}
+-	#else
+-	unsigned long parsed = inet_addr(host);
+-	if(parsed != INADDR_NONE || strcmp(host, "255.255.255.255") == 0)
+-	{
+-		address->s_addr = parsed;
+-		return true;
+-	}
+-	#endif
+-
+-	hostent *hostEntry = gethostbyname(host);
+-	if(hostEntry != NULL && hostEntry->h_addrtype == AF_INET &&
+-	   hostEntry->h_addr_list != NULL && hostEntry->h_addr_list[0] != NULL)
+-	{
+-		memcpy(address, hostEntry->h_addr_list[0], sizeof(in_addr));
+-		return true;
+-	}
+-
+-	return false;
+-}
+-
+-class SocketDirectNetworkPlayer : public INetworkPlayer
+-{
+-public:
+-	SocketDirectNetworkPlayer(BYTE smallId, bool isHost, bool isLocal, int userIndex, const wchar_t *onlineName)
+-		: m_smallId(smallId)
+-		, m_isHost(isHost)
+-		, m_isLocal(isLocal)
+-		, m_userIndex(userIndex)
+-		, m_uid()
+-		, m_socket(NULL)
+-	{
+-	#if defined(__PS3__)
+-		m_uid.setUserID(0x70000000u | (unsigned int)smallId | (isHost ? 0x100u : 0u));
+-	#else
+-		m_uid = (PlayerUID)(0xF000D45200000000ULL | ((ULONGLONG)smallId << 8) | (isHost ? 1ULL : 0ULL));
+-	#endif
+-
+-		if(onlineName != NULL)
+-		{
+-			m_onlineName = onlineName;
+-		}
+-		else
+-		{
+-			m_onlineName = L"tcp";
+-		}
+-	}
+-
+-	virtual unsigned char GetSmallId() { return m_smallId; }
+-	virtual void SendData(INetworkPlayer *player, const void *pvData, int dataSize, bool lowPriority)
+-	{
+-		(void)(player);
+-		(void)(pvData);
+-		(void)(dataSize);
+-		(void)(lowPriority);
+-	}
+-	virtual bool IsSameSystem(INetworkPlayer *player)
+-	{
+-		if(player == NULL)
+-		{
+-			return false;
+-		}
+-		return player == this;
+-	}
+-	virtual int GetSendQueueSizeBytes( INetworkPlayer *player, bool lowPriority )
+-	{
+-		(void)(player);
+-		(void)(lowPriority);
+-		return 0;
+-	}
+-	virtual int GetSendQueueSizeMessages( INetworkPlayer *player, bool lowPriority )
+-	{
+-		(void)(player);
+-		(void)(lowPriority);
+-		return 0;
+-	}
+-	virtual int GetCurrentRtt() { return 0; }
+-	virtual bool IsHost() { return m_isHost; }
+-	virtual bool IsGuest() { return false; }
+-	virtual bool IsLocal() { return m_isLocal; }
+-	virtual int GetSessionIndex() { return m_smallId; }
+-	virtual bool IsTalking() { return false; }
+-	virtual bool IsMutedByLocalUser(int userIndex)
+-	{
+-		(void)(userIndex);
+-		return false;
+-	}
+-	virtual bool HasVoice() { return false; }
+-	virtual bool HasCamera() { return false; }
+-	virtual int GetUserIndex() { return m_userIndex; }
+-	virtual void SetSocket(Socket *pSocket) { m_socket = pSocket; }
+-	virtual Socket *GetSocket() { return m_socket; }
+-	virtual const wchar_t *GetOnlineName() { return m_onlineName.c_str(); }
+-	virtual wstring GetDisplayName() { return m_onlineName; }
+-	virtual PlayerUID GetUID() { return m_uid; }
+-	void SetOnlineName(const wstring& onlineName)
+-	{
+-		if(!onlineName.empty())
+-		{
+-			m_onlineName = onlineName;
+-		}
+-	}
+-
+-private:
+-	BYTE m_smallId;
+-	bool m_isHost;
+-	bool m_isLocal;
+-	int m_userIndex;
+-	PlayerUID m_uid;
+-	Socket *m_socket;
+-	wstring m_onlineName;
+-};
+-#endif
+-}
+-
+ // This current socket implementation is for the creation of a single local link. 2 sockets can be created, one for either end of this local
+ // link, the end (0 or 1) is passed as a parameter to the ctor.
+ 
+-CRITICAL_SECTION Socket::s_hostQueueLock[2];
++CRITICAL_SECTION Socket::s_hostQueueLock[2]; 
+ std::queue<byte> Socket::s_hostQueue[2];
+ Socket::SocketOutputStreamLocal *Socket::s_hostOutStream[2];
+ Socket::SocketInputStreamLocal *Socket::s_hostInStream[2];
+ ServerConnection *Socket::s_serverConnection = NULL;
+-C4JThread *Socket::s_tcpAcceptThread = NULL;
+-volatile int Socket::s_tcpAcceptRunning = 0;
+-unsigned long long Socket::s_tcpListenSocketHandle = INVALID_NATIVE_SOCKET_HANDLE;
+-unsigned char Socket::s_nextTcpSmallId = 1;
+-bool Socket::s_tcpSubsystemInitialised = false;
+-CRITICAL_SECTION Socket::s_directPlayersLock;
+-bool Socket::s_directPlayersLockInitialised = false;
+-std::vector<INetworkPlayer *> Socket::s_directPlayers;
+-wstring Socket::s_lastDirectConnectHost = L"";
+-int Socket::s_lastDirectConnectPort = 0;
+-
+-bool Socket::EnsureTcpSubsystem()
+-{
+-#if defined(_WINDOWS64)
+-	if(s_tcpSubsystemInitialised)
+-	{
+-		return true;
+-	}
+-
+-	WSADATA wsaData;
+-	int result = WSAStartup(MAKEWORD(2,2), &wsaData);
+-	if(result != 0)
+-	{
+-		app.DebugPrintf("WSAStartup failed with error %d\n", result);
+-		return false;
+-	}
+-
+-	s_tcpSubsystemInitialised = true;
+-	return true;
+-#elif defined(__PS3__)
+-	s_tcpSubsystemInitialised = true;
+-	return true;
+-#else
+-	return false;
+-#endif
+-}
+ 
+ void Socket::Initialise(ServerConnection *serverConnection)
+ {
+ 	s_serverConnection = serverConnection;
+ 
+-	if(!s_directPlayersLockInitialised)
+-	{
+-		InitializeCriticalSection(&s_directPlayersLock);
+-		s_directPlayersLockInitialised = true;
+-	}
+-
+-	if(serverConnection == NULL)
+-	{
+-		StopTcpServerListener();
+-	}
+-
+ 	// Only initialise everything else once - just setting up static data, one time xrnm things, thread for ticking sockets
+ 	static bool init = false;
+ 	if( init )
+@@ -259,7 +27,7 @@ void Socket::Initialise(ServerConnection *serverConnection)
+ 		for( int i = 0; i < 2; i++ )
+ 		{
+ 			if(TryEnterCriticalSection(&s_hostQueueLock[i]))
+-			{
++			{			
+ 				// Clear the queue
+ 				std::queue<byte> empty;
+ 				std::swap( s_hostQueue[i], empty );
+@@ -269,8 +37,8 @@ void Socket::Initialise(ServerConnection *serverConnection)
+ 			s_hostInStream[i]->m_streamOpen = true;
+ 		}
+ 		return;
+-		}
+-		init = true;
++	}
++	init = true;
+ 
+ 	for( int i = 0; i < 2; i++ )
+ 	{
+@@ -280,258 +48,8 @@ void Socket::Initialise(ServerConnection *serverConnection)
+ 	}
+ }
+ 
+-void Socket::RegisterDirectPlayer(INetworkPlayer *player)
+-{
+-	if(player == NULL)
+-	{
+-		return;
+-	}
+-	if(!s_directPlayersLockInitialised)
+-	{
+-		InitializeCriticalSection(&s_directPlayersLock);
+-		s_directPlayersLockInitialised = true;
+-	}
+-
+-	EnterCriticalSection(&s_directPlayersLock);
+-	for(std::vector<INetworkPlayer *>::iterator it = s_directPlayers.begin(); it != s_directPlayers.end(); ++it)
+-	{
+-		if(*it == player)
+-		{
+-			LeaveCriticalSection(&s_directPlayersLock);
+-			return;
+-		}
+-	}
+-	s_directPlayers.push_back(player);
+-	LeaveCriticalSection(&s_directPlayersLock);
+-}
+-
+-void Socket::UnregisterDirectPlayer(INetworkPlayer *player)
+-{
+-	if(player == NULL || !s_directPlayersLockInitialised)
+-	{
+-		return;
+-	}
+-
+-	EnterCriticalSection(&s_directPlayersLock);
+-	for(std::vector<INetworkPlayer *>::iterator it = s_directPlayers.begin(); it != s_directPlayers.end(); ++it)
+-	{
+-		if(*it == player)
+-		{
+-			s_directPlayers.erase(it);
+-			break;
+-		}
+-	}
+-	LeaveCriticalSection(&s_directPlayersLock);
+-}
+-
+-int Socket::GetDirectPlayerCount()
+-{
+-	if(!s_directPlayersLockInitialised)
+-	{
+-		return 0;
+-	}
+-
+-	EnterCriticalSection(&s_directPlayersLock);
+-	const int count = (int)s_directPlayers.size();
+-	LeaveCriticalSection(&s_directPlayersLock);
+-	return count;
+-}
+-
+-INetworkPlayer *Socket::GetDirectPlayerByIndex(int index)
+-{
+-	if(!s_directPlayersLockInitialised || index < 0)
+-	{
+-		return NULL;
+-	}
+-
+-	EnterCriticalSection(&s_directPlayersLock);
+-	INetworkPlayer *player = (index < (int)s_directPlayers.size()) ? s_directPlayers[index] : NULL;
+-	LeaveCriticalSection(&s_directPlayersLock);
+-	return player;
+-}
+-
+-INetworkPlayer *Socket::GetDirectPlayerBySmallId(unsigned char smallId)
+-{
+-	if(!s_directPlayersLockInitialised)
+-	{
+-		return NULL;
+-	}
+-
+-	EnterCriticalSection(&s_directPlayersLock);
+-	INetworkPlayer *player = NULL;
+-	for(std::vector<INetworkPlayer *>::iterator it = s_directPlayers.begin(); it != s_directPlayers.end(); ++it)
+-	{
+-		if((*it) != NULL && (*it)->GetSmallId() == smallId)
+-		{
+-			player = *it;
+-			break;
+-		}
+-	}
+-	LeaveCriticalSection(&s_directPlayersLock);
+-	return player;
+-}
+-
+-void Socket::StartTcpServerListener(const wstring& bindAddress, int port)
+-{
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	StopTcpServerListener();
+-
+-	if(!EnsureTcpSubsystem())
+-	{
+-		return;
+-	}
+-
+-	SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+-	if(listenSocket == INVALID_SOCKET)
+-	{
+-		app.DebugPrintf("Failed creating TCP listen socket: %d\n", WSAGetLastError());
+-		return;
+-	}
+-
+-	BOOL reuseAddress = TRUE;
+-	setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuseAddress, sizeof(reuseAddress));
+-
+-	sockaddr_in address;
+-	ZeroMemory(&address, sizeof(address));
+-	address.sin_family = AF_INET;
+-	address.sin_port = htons((unsigned short)port);
+-
+-	bool bindOk = false;
+-	if(bindAddress.empty())
+-	{
+-		address.sin_addr.s_addr = htonl(INADDR_ANY);
+-		bindOk = true;
+-	}
+-	else
+-	{
+-		const char *bindText = wstringtofilename(bindAddress);
+-		if(bindText != NULL && bindText[0] != '\0')
+-		{
+-			if(ResolveIPv4Address(bindText, &address.sin_addr))
+-			{
+-				bindOk = true;
+-			}
+-		}
+-	}
+-
+-	if(!bindOk)
+-	{
+-		app.DebugPrintf("Unable to resolve bind address for TCP listener\n");
+-		closesocket(listenSocket);
+-		return;
+-	}
+-
+-	if(::bind(listenSocket, (sockaddr *)&address, sizeof(address)) == SOCKET_ERROR)
+-	{
+-		app.DebugPrintf("TCP bind failed: %d\n", WSAGetLastError());
+-		closesocket(listenSocket);
+-		return;
+-	}
+-
+-	if(listen(listenSocket, SOMAXCONN) == SOCKET_ERROR)
+-	{
+-		app.DebugPrintf("TCP listen failed: %d\n", WSAGetLastError());
+-		closesocket(listenSocket);
+-		return;
+-	}
+-
+-#if defined(__PS3__)
+-	int nonBlocking = 1;
+-	setsockopt(listenSocket, SOL_SOCKET, SO_NBIO, &nonBlocking, sizeof(nonBlocking));
+-#endif
+-
+-	s_tcpListenSocketHandle = (unsigned long long)listenSocket;
+-	s_tcpAcceptRunning = 1;
+-	s_tcpAcceptThread = new C4JThread(&Socket::DirectSocketAcceptThreadProc, NULL, "TcpSocketAccept");
+-	s_tcpAcceptThread->SetProcessor(CPU_CORE_CONNECTIONS);
+-	s_tcpAcceptThread->Run();
+-
+-	app.DebugPrintf("TCP listener started on %ls:%d\n", bindAddress.empty() ? L"*" : bindAddress.c_str(), port);
+-#else
+-	(void)(bindAddress);
+-	(void)(port);
+-#endif
+-}
+-
+-void Socket::StopTcpServerListener()
+-{
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	s_tcpAcceptRunning = 0;
+-
+-	SOCKET listenSocket = (SOCKET)s_tcpListenSocketHandle;
+-	if(listenSocket != INVALID_SOCKET)
+-	{
+-		shutdown(listenSocket, SD_BOTH);
+-		closesocket(listenSocket);
+-		s_tcpListenSocketHandle = INVALID_NATIVE_SOCKET_HANDLE;
+-	}
+-
+-	if(s_tcpAcceptThread != NULL)
+-	{
+-		s_tcpAcceptThread->WaitForCompletion(INFINITE);
+-		delete s_tcpAcceptThread;
+-		s_tcpAcceptThread = NULL;
+-	}
+-
+-#endif
+-}
+-
+-bool Socket::GetLastDirectConnectEndpoint(wstring *host, int *port)
+-{
+-	if(s_lastDirectConnectHost.empty() || s_lastDirectConnectPort <= 0)
+-	{
+-		return false;
+-	}
+-
+-	if(host != NULL)
+-	{
+-		*host = s_lastDirectConnectHost;
+-	}
+-	if(port != NULL)
+-	{
+-		*port = s_lastDirectConnectPort;
+-	}
+-	return true;
+-}
+-
+-void Socket::initialiseNetworkQueues(bool response, bool hostLocal)
+-{
+-	m_hostServerConnection = false;
+-	m_hostLocal = hostLocal;
+-
+-	for( int i = 0; i < 2; i++ )
+-	{
+-		InitializeCriticalSection(&m_queueLockNetwork[i]);
+-		m_inputStream[i] = NULL;
+-		m_outputStream[i] = NULL;
+-		m_endClosed[i] = false;
+-	}
+-
+-	if(!response || hostLocal)
+-	{
+-		m_inputStream[SOCKET_CLIENT_END] = new SocketInputStreamNetwork(this, SOCKET_CLIENT_END);
+-		m_outputStream[SOCKET_CLIENT_END] = new SocketOutputStreamNetwork(this, SOCKET_CLIENT_END);
+-		m_end = SOCKET_CLIENT_END;
+-	}
+-	if(response || hostLocal)
+-	{
+-		m_inputStream[SOCKET_SERVER_END] = new SocketInputStreamNetwork(this, SOCKET_SERVER_END);
+-		m_outputStream[SOCKET_SERVER_END] = new SocketOutputStreamNetwork(this, SOCKET_SERVER_END);
+-		m_end = SOCKET_SERVER_END;
+-	}
+-
+-	m_socketClosedEvent = new C4JThread::Event;
+-}
+-
+ Socket::Socket(bool response)
+ {
+-	m_useTcpTransport = false;
+-	m_tcpAcceptedServerSide = false;
+-	m_tcpSocketHandle = INVALID_NATIVE_SOCKET_HANDLE;
+-	m_tcpReadThread = NULL;
+-	m_tcpReadRunning = 0;
+-	m_directNetworkPlayer = NULL;
+-
+ 	m_hostServerConnection = true;
+ 	m_hostLocal = true;
+ 	if( response )
+@@ -541,448 +59,48 @@ Socket::Socket(bool response)
+ 	else
+ 	{
+ 		m_end = SOCKET_CLIENT_END;
+-		Socket *socket = new Socket(true);
++		Socket *socket = new Socket(1);
+ 		s_serverConnection->NewIncomingSocket(socket);
+ 	}
+ 
+ 	for( int i = 0; i < 2; i++ )
+-	{
++	{		
+ 		m_endClosed[i] = false;
+ 	}
+ 	m_socketClosedEvent = NULL;
+ 	createdOk = true;
+-	INetworkPlayer *hostPlayer = g_NetworkManager.GetHostPlayer();
+-	networkPlayerSmallId = hostPlayer != NULL ? hostPlayer->GetSmallId() : 0;
++	networkPlayerSmallId = g_NetworkManager.GetHostPlayer()->GetSmallId();
+ }
+ 
+ Socket::Socket(INetworkPlayer *player, bool response /* = false*/, bool hostLocal /*= false*/)
+ {
+-	m_useTcpTransport = false;
+-	m_tcpAcceptedServerSide = false;
+-	m_tcpSocketHandle = INVALID_NATIVE_SOCKET_HANDLE;
+-	m_tcpReadThread = NULL;
+-	m_tcpReadRunning = 0;
+-	m_directNetworkPlayer = NULL;
+-
+-	initialiseNetworkQueues(response, hostLocal);
+-
+-	//printf("New socket made %s\n", player->GetGamertag() );
+-	networkPlayerSmallId = player != NULL ? player->GetSmallId() : 0;
+-	createdOk = true;
+-}
+-
+-Socket::Socket(const wstring& ip, int port)
+-{
+-	m_useTcpTransport = false;
+-	m_tcpAcceptedServerSide = false;
+-	m_tcpSocketHandle = INVALID_NATIVE_SOCKET_HANDLE;
+-	m_tcpReadThread = NULL;
+-	m_tcpReadRunning = 0;
+-	m_directNetworkPlayer = NULL;
+-
+-	initialiseNetworkQueues(false, false);
+-
+-	networkPlayerSmallId = 0;
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	// Client-side direct socket represents the remote host player.
+-	m_directNetworkPlayer = new SocketDirectNetworkPlayer(networkPlayerSmallId, true, false, -1, L"host");
+-	m_directNetworkPlayer->SetSocket(this);
+-	RegisterDirectPlayer(m_directNetworkPlayer);
+-#endif
+-
+-	createdOk = connectDirectSocket(ip, port);
+-	if(!createdOk)
+-	{
+-		closeDirectSocket();
+-	}
+-}
+-
+-Socket::Socket(unsigned long long connectedSocketHandle, bool serverSide)
+-{
+-	m_useTcpTransport = false;
+-	m_tcpAcceptedServerSide = serverSide;
+-	m_tcpSocketHandle = INVALID_NATIVE_SOCKET_HANDLE;
+-	m_tcpReadThread = NULL;
+-	m_tcpReadRunning = 0;
+-	m_directNetworkPlayer = NULL;
+-
+-	initialiseNetworkQueues(serverSide, false);
+-
+-	if(s_nextTcpSmallId == 0)
+-	{
+-		s_nextTcpSmallId = 1;
+-	}
+-	networkPlayerSmallId = s_nextTcpSmallId++;
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	m_directNetworkPlayer = new SocketDirectNetworkPlayer(networkPlayerSmallId, false, false, -1, L"remote");
+-	m_directNetworkPlayer->SetSocket(this);
+-	RegisterDirectPlayer(m_directNetworkPlayer);
+-#endif
+-
+-	createdOk = initialiseDirectSocket(connectedSocketHandle, serverSide);
+-	if(!createdOk)
+-	{
+-		closeDirectSocket();
+-	}
+-}
+-
+-bool Socket::initialiseDirectSocket(unsigned long long connectedSocketHandle, bool serverSide)
+-{
+-	(void)(serverSide);
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	if(!EnsureTcpSubsystem())
+-	{
+-		return false;
+-	}
+-
+-	SOCKET nativeSocket = (SOCKET)connectedSocketHandle;
+-	if(nativeSocket == INVALID_SOCKET)
+-	{
+-		return false;
+-	}
+-
+-	BOOL noDelay = TRUE;
+-	setsockopt(nativeSocket, IPPROTO_TCP, TCP_NODELAY, (const char *)&noDelay, sizeof(noDelay));
+-
+-	m_useTcpTransport = true;
+-	m_tcpSocketHandle = connectedSocketHandle;
+-	m_tcpReadRunning = 1;
+-
+-	m_tcpReadThread = new C4JThread(&Socket::DirectSocketReadThreadProc, this, serverSide ? "TcpReadServer" : "TcpReadClient");
+-	m_tcpReadThread->SetProcessor(CPU_CORE_CONNECTIONS);
+-	m_tcpReadThread->Run();
+-	app.DebugPrintf("Direct TCP socket initialised (%s side), smallId=%d\n", serverSide ? "server" : "client", (int)networkPlayerSmallId);
+-
+-	return true;
+-#else
+-	(void)(connectedSocketHandle);
+-	return false;
+-#endif
+-}
+-
+-bool Socket::connectDirectSocket(const wstring& ip, int port)
+-{
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	if(!EnsureTcpSubsystem())
+-	{
+-		return false;
+-	}
+-
+-	SOCKET socketHandle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+-	if(socketHandle == INVALID_SOCKET)
+-	{
+-		app.DebugPrintf("Failed creating TCP client socket: %d\n", WSAGetLastError());
+-		return false;
+-	}
+-
+-	const char *hostText = ip.empty() ? "127.0.0.1" : wstringtofilename(ip);
+-	string host = (hostText != NULL && hostText[0] != '\0') ? string(hostText) : string("127.0.0.1");
+-
+-	sockaddr_in address;
+-	ZeroMemory(&address, sizeof(address));
+-	address.sin_family = AF_INET;
+-	address.sin_port = htons((unsigned short)port);
+-
+-	bool hasAddress = false;
+-	if(ResolveIPv4Address(host.c_str(), &address.sin_addr))
+-	{
+-		hasAddress = true;
+-	}
+-
+-	if(!hasAddress)
+-	{
+-		app.DebugPrintf("Unable to resolve host: %s\n", host.c_str());
+-		closesocket(socketHandle);
+-		return false;
+-	}
+-
+-	if(connect(socketHandle, (sockaddr *)&address, sizeof(address)) == SOCKET_ERROR)
+-	{
+-		app.DebugPrintf("TCP connect failed to %s:%d with error %d\n", host.c_str(), port, WSAGetLastError());
+-		closesocket(socketHandle);
+-		return false;
+-	}
+-
+-	app.DebugPrintf("Connected to TCP server %s:%d\n", host.c_str(), port);
+-	const bool initialiseOk = initialiseDirectSocket((unsigned long long)socketHandle, false);
+-	if(initialiseOk)
+-	{
+-		s_lastDirectConnectHost = convStringToWstring(host);
+-		s_lastDirectConnectPort = port;
+-	}
+-	return initialiseOk;
+-#else
+-	(void)(ip);
+-	(void)(port);
+-	return false;
+-#endif
+-}
+-
+-int Socket::DirectSocketReadThreadProc(void *lpParam)
+-{
+-	Socket *socket = (Socket *)lpParam;
+-	if(socket == NULL)
+-	{
+-		return 0;
+-	}
+-
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	SOCKET nativeSocket = (SOCKET)socket->m_tcpSocketHandle;
+-	if(nativeSocket == INVALID_SOCKET)
+-	{
+-		app.DebugPrintf("Direct TCP read thread started with invalid socket handle\n");
+-		socket->m_tcpReadRunning = 0;
+-		return 0;
+-	}
+-
+-	BYTE readBuffer[4096];
+-	bool loggedFirstRead = false;
+-	while(socket->m_tcpReadRunning)
+-	{
+-		int bytesRead = recv(nativeSocket, (char *)readBuffer, sizeof(readBuffer), 0);
+-		if(bytesRead > 0)
+-		{
+-			if(!loggedFirstRead)
+-			{
+-				app.DebugPrintf("Direct TCP read received %d bytes (first read)\n", bytesRead);
+-				loggedFirstRead = true;
+-			}
+-			socket->enqueueReceivedData(readBuffer, (unsigned int)bytesRead);
+-			continue;
+-		}
+-
+-		if(bytesRead == 0)
+-		{
+-			app.DebugPrintf("Direct TCP read got EOF from peer\n");
+-			break;
+-		}
+-
+-		const int error = WSAGetLastError();
+-		if(error == WSAEINTR)
+-		{
+-			continue;
+-		}
+-		if(error == WSAEWOULDBLOCK)
+-		{
+-			Sleep(1);
+-			continue;
+-		}
+-
+-		app.DebugPrintf("TCP recv failed with error %d\n", error);
+-		break;
+-	}
+-	app.DebugPrintf("Direct TCP read thread exiting\n");
+-
+-	socket->m_tcpReadRunning = 0;
+-
+-	SOCKET socketToClose = (SOCKET)socket->m_tcpSocketHandle;
+-	if(socketToClose != INVALID_SOCKET)
+-	{
+-		shutdown(socketToClose, SD_BOTH);
+-		closesocket(socketToClose);
+-		socket->m_tcpSocketHandle = INVALID_NATIVE_SOCKET_HANDLE;
+-	}
+-
+-#endif
+-
+-	if(socket->m_inputStream[socket->m_end] != NULL)
+-	{
+-		socket->m_inputStream[socket->m_end]->close();
+-	}
+-	socket->m_endClosed[socket->m_end] = true;
+-	socket->createdOk = false;
+-	if(socket->m_socketClosedEvent != NULL)
+-	{
+-		socket->m_socketClosedEvent->Set();
+-	}
+-
+-	return 0;
+-}
+-
+-int Socket::DirectSocketAcceptThreadProc(void *lpParam)
+-{
+-	(void)(lpParam);
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	while(s_tcpAcceptRunning)
+-	{
+-		SOCKET listenSocket = (SOCKET)s_tcpListenSocketHandle;
+-		if(listenSocket == INVALID_SOCKET)
+-		{
+-			break;
+-		}
+-
+-#if defined(__PS3__)
+-		SOCKET acceptedSocket = accept(listenSocket, NULL, NULL);
+-		if(acceptedSocket == INVALID_SOCKET)
+-		{
+-			const int error = WSAGetLastError();
+-			if(error == WSAEINTR || error == WSAEWOULDBLOCK)
+-			{
+-				Sleep(10);
+-				continue;
+-			}
+-
+-			if(!s_tcpAcceptRunning)
+-			{
+-				break;
+-			}
+-
+-			Sleep(10);
+-			continue;
+-		}
+-#else
+-		fd_set socketsToRead;
+-		FD_ZERO(&socketsToRead);
+-		FD_SET(listenSocket, &socketsToRead);
+-
+-		timeval timeout;
+-		timeout.tv_sec = 0;
+-		timeout.tv_usec = 200000;
+-
+-		int result = 0;
+-#if defined(__PS3__)
+-		result = select(listenSocket + 1, &socketsToRead, NULL, NULL, &timeout);
+-#else
+-		result = select(0, &socketsToRead, NULL, NULL, &timeout);
+-#endif
+-		if(result <= 0)
+-		{
+-			continue;
+-		}
+-
+-		SOCKET acceptedSocket = accept(listenSocket, NULL, NULL);
+-		if(acceptedSocket == INVALID_SOCKET)
+-		{
+-			continue;
+-		}
+-#endif
+-
+-		Socket *socket = new Socket((unsigned long long)acceptedSocket, true);
+-		if(socket == NULL)
+-		{
+-			closesocket(acceptedSocket);
+-			continue;
+-		}
+-		if(!socket->createdOk)
+-		{
+-			delete socket;
+-			continue;
+-		}
+-
+-		Socket::addIncomingSocket(socket);
+-		app.DebugPrintf("Accepted TCP client connection\n");
+-	}
+-#endif
+-	return 0;
+-}
+-
+-void Socket::closeDirectSocket()
+-{
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	m_tcpReadRunning = 0;
+-
+-	SOCKET nativeSocket = (SOCKET)m_tcpSocketHandle;
+-	if(nativeSocket != INVALID_SOCKET)
+-	{
+-		shutdown(nativeSocket, SD_BOTH);
+-		closesocket(nativeSocket);
+-		m_tcpSocketHandle = INVALID_NATIVE_SOCKET_HANDLE;
+-	}
+-#endif
+-
+-	if(m_tcpReadThread != NULL)
+-	{
+-		if(C4JThread::getCurrentThread() != m_tcpReadThread)
+-		{
+-			m_tcpReadThread->WaitForCompletion(INFINITE);
+-		}
+-		delete m_tcpReadThread;
+-		m_tcpReadThread = NULL;
+-	}
+-
+-	if(m_directNetworkPlayer != NULL)
+-	{
+-		UnregisterDirectPlayer(m_directNetworkPlayer);
+-		delete m_directNetworkPlayer;
+-		m_directNetworkPlayer = NULL;
+-	}
+-
+-}
+-
+-bool Socket::sendDirectData(const BYTE *pbData, unsigned int dataSize)
+-{
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	if(!m_useTcpTransport)
+-	{
+-		return false;
+-	}
+-
+-	SOCKET nativeSocket = (SOCKET)m_tcpSocketHandle;
+-	if(nativeSocket == INVALID_SOCKET)
+-	{
+-		return false;
+-	}
++	m_hostServerConnection = false;
++	m_hostLocal = hostLocal;
+ 
+-	unsigned int sentBytes = 0;
+-	while(sentBytes < dataSize)
++	for( int i = 0; i < 2; i++ )
+ 	{
+-		int sent = send(nativeSocket, (const char *)pbData + sentBytes, (int)(dataSize - sentBytes), 0);
+-		if(sent == 0)
+-		{
+-			app.DebugPrintf("TCP send returned 0 (peer disconnected)\n");
+-			m_endClosed[m_end] = true;
+-			createdOk = false;
+-			if(m_socketClosedEvent != NULL)
+-			{
+-				m_socketClosedEvent->Set();
+-			}
+-			return false;
+-		}
+-		if(sent == SOCKET_ERROR)
+-		{
+-			const int error = WSAGetLastError();
+-			if(error == WSAEINTR)
+-			{
+-				continue;
+-			}
+-			if(error == WSAEWOULDBLOCK)
+-			{
+-				Sleep(1);
+-				continue;
+-			}
+-
+-			app.DebugPrintf("TCP send failed with error %d\n", error);
+-			m_endClosed[m_end] = true;
+-			createdOk = false;
+-			if(m_socketClosedEvent != NULL)
+-			{
+-				m_socketClosedEvent->Set();
+-			}
+-			return false;
+-		}
+-		sentBytes += sent;
++		InitializeCriticalSection(&m_queueLockNetwork[i]);		
++		m_inputStream[i] = NULL;
++		m_outputStream[i] = NULL;		
++		m_endClosed[i] = false;
+ 	}
+-	return true;
+-#else
+-	(void)(pbData);
+-	(void)(dataSize);
+-	return false;
+-#endif
+-}
+-
+-void Socket::enqueueReceivedData(const BYTE *pbData, unsigned int dataSize)
+-{
+-	if(pbData == NULL || dataSize == 0)
++	
++	if(!response || hostLocal)
+ 	{
+-		return;
++		m_inputStream[0] = new SocketInputStreamNetwork(this,0);
++		m_outputStream[0] = new SocketOutputStreamNetwork(this,0);
++		m_end = SOCKET_CLIENT_END;
+ 	}
+-
+-	EnterCriticalSection(&m_queueLockNetwork[m_end]);
+-	for(unsigned int i = 0; i < dataSize; ++i)
++	if(response || hostLocal)
+ 	{
+-		m_queueNetwork[m_end].push(pbData[i]);
++		m_inputStream[1] = new SocketInputStreamNetwork(this,1);
++		m_outputStream[1] = new SocketOutputStreamNetwork(this,1);
++		m_end = SOCKET_SERVER_END;
+ 	}
+-	LeaveCriticalSection(&m_queueLockNetwork[m_end]);
++	m_socketClosedEvent = new C4JThread::Event;
++	//printf("New socket made %s\n", player->GetGamertag() );
++	networkPlayerSmallId = player->GetSmallId();
++	createdOk = true;
+ }
+ 
+ SocketAddress *Socket::getRemoteSocketAddress()
+@@ -992,25 +110,12 @@ SocketAddress *Socket::getRemoteSocketAddress()
+ 
+ INetworkPlayer *Socket::getPlayer()
+ {
+-	if(m_directNetworkPlayer != NULL)
+-	{
+-		if(!m_tcpAcceptedServerSide && m_directNetworkPlayer->IsHost() && networkPlayerSmallId != 0)
+-		{
+-			INetworkPlayer *mappedPlayer = g_NetworkManager.GetPlayerBySmallId(networkPlayerSmallId);
+-			if(mappedPlayer != NULL)
+-			{
+-				return mappedPlayer;
+-			}
+-		}
+-
+-		return m_directNetworkPlayer;
+-	}
+ 	return g_NetworkManager.GetPlayerBySmallId(networkPlayerSmallId);
+ }
+ 
+ void Socket::setPlayer(INetworkPlayer *player)
+ {
+-	if(player != NULL)
++	if(player!=NULL)
+ 	{
+ 		networkPlayerSmallId = player->GetSmallId();
+ 	}
+@@ -1020,21 +125,6 @@ void Socket::setPlayer(INetworkPlayer *player)
+ 	}
+ }
+ 
+-void Socket::setDirectPlayerOnlineName(const wstring& onlineName)
+-{
+-#if defined(_WINDOWS64) || defined(__PS3__)
+-	if(onlineName.empty() || m_directNetworkPlayer == NULL)
+-	{
+-		return;
+-	}
+-
+-	SocketDirectNetworkPlayer *directPlayer = (SocketDirectNetworkPlayer *)m_directNetworkPlayer;
+-	directPlayer->SetOnlineName(onlineName);
+-#else
+-	(void)(onlineName);
+-#endif
+-}
+-
+ void Socket::pushDataToQueue(const BYTE * pbData, DWORD dwDataSize, bool fromHost /*= true*/)
+ {
+ 	int queueIdx = SOCKET_CLIENT_END;
+@@ -1091,12 +181,10 @@ InputStream *Socket::getInputStream(bool isServerConnection)
+ 
+ void Socket::setSoTimeout(int a )
+ {
+-	(void)(a);
+ }
+ 
+ void Socket::setTrafficClass( int a )
+ {
+-	(void)(a);
+ }
+ 
+ Socket::SocketOutputStream *Socket::getOutputStream(bool isServerConnection)
+@@ -1152,12 +240,6 @@ bool Socket::close(bool isServerConnection)
+ 		allClosed = true;
+ 		m_endClosed[m_end] = true;
+ 	}
+-
+-	if(allClosed && m_useTcpTransport)
+-	{
+-		closeDirectSocket();
+-	}
+-
+ 	if( allClosed && m_socketClosedEvent != NULL )
+ 	{
+ 		m_socketClosedEvent->Set();
+@@ -1341,11 +423,6 @@ int Socket::SocketInputStreamNetwork::read(byteArray b, unsigned int offset, uns
+ 	return -1;
+ }
+ 
+-bool Socket::SocketInputStreamNetwork::isDirectTcpTransport() const
+-{
+-	return m_socket != NULL && m_socket->m_useTcpTransport;
+-}
+-
+ void Socket::SocketInputStreamNetwork::close()
+ {
+ 	m_streamOpen = false;
+@@ -1378,7 +455,7 @@ void Socket::SocketOutputStreamNetwork::write(byteArray b)
+ }
+ 
+ void Socket::SocketOutputStreamNetwork::write(byteArray b, unsigned int offset, unsigned int length)
+-{
++{	
+ 	writeWithFlags(b, offset, length, 0);
+ }
+ 
+@@ -1387,12 +464,6 @@ void Socket::SocketOutputStreamNetwork::writeWithFlags(byteArray b, unsigned int
+ 	if( m_streamOpen != true ) return;
+ 	if( length == 0 ) return;
+ 
+-	if( m_socket->m_useTcpTransport )
+-	{
+-		m_socket->sendDirectData((const BYTE *)&b[offset], length);
+-		return;
+-	}
+-
+ 	// If this is a local connection, don't bother going through QNet as it just delivers it straight anyway
+ 	if( m_socket->m_hostLocal )
+ 	{
+@@ -1431,10 +502,27 @@ void Socket::SocketOutputStreamNetwork::writeWithFlags(byteArray b, unsigned int
+ 
+ 		if( m_queueIdx == SOCKET_SERVER_END )
+ 		{
++			//printf( "Sent %u bytes of data from \"%ls\" to \"%ls\"\n",
++			//buffer.dwDataSize,
++			//hostPlayer->GetGamertag(),
++			//m_socket->networkPlayer->GetGamertag());
++
+ 			hostPlayer->SendData(socketPlayer, buffer.pbyData, buffer.dwDataSize, QNET_SENDDATA_RELIABLE | QNET_SENDDATA_SEQUENTIAL | flags);
++
++	// 		DWORD queueSize = hostPlayer->GetSendQueueSize( NULL, QNET_GETSENDQUEUESIZE_BYTES  );
++	// 		if( queueSize > 24000 )
++	// 		{
++	// 			//printf("Queue size is: %d, forcing doWork()\n",queueSize);
++	// 			g_NetworkManager.DoWork();
++	// 		}
+ 		}
+ 		else
+ 		{
++			//printf( "Sent %u bytes of data from \"%ls\" to \"%ls\"\n",
++			//buffer.dwDataSize,
++			//m_socket->networkPlayer->GetGamertag(),
++			//hostPlayer->GetGamertag());
++
+ 			socketPlayer->SendData(hostPlayer, buffer.pbyData, buffer.dwDataSize, QNET_SENDDATA_RELIABLE | QNET_SENDDATA_SEQUENTIAL | flags);
+ 		}
+ 	}
+@@ -1443,9 +531,4 @@ void Socket::SocketOutputStreamNetwork::writeWithFlags(byteArray b, unsigned int
+ void Socket::SocketOutputStreamNetwork::close()
+ {
+ 	m_streamOpen = false;
+-}
+-
+-bool Socket::SocketOutputStreamNetwork::isDirectTcpTransport() const
+-{
+-	return m_socket != NULL && m_socket->m_useTcpTransport;
+-}
++}
+\ No newline at end of file
+diff --git a/Minecraft.World/Socket.h b/Minecraft.World/Socket.h
+index 2cf5ffc2..0019f984 100644
+--- a/Minecraft.World/Socket.h
++++ b/Minecraft.World/Socket.h
+@@ -1,7 +1,6 @@
+ #pragma once
+ #include <xrnm.h>
+ #include <queue>
+-#include <vector>
+ #include <qnet.h>
+ #include "InputStream.h"
+ #include "OutputStream.h"
+@@ -62,43 +61,35 @@ private:
+ 		bool m_streamOpen;
+ 		int	m_queueIdx;
+ 		Socket *m_socket;
+-		public:
+-			SocketInputStreamNetwork(Socket *socket, int queueIdx);
+-
+-			virtual int read();
+-			virtual int read(byteArray b);
+-			virtual int read(byteArray b, unsigned int offset, unsigned int length);
+-			virtual void close();
+-			virtual __int64 skip(__int64 n) { return n; } // 4J Stu - Not implemented
+-			virtual void flush() {}
+-			virtual bool isDirectTcpTransport() const;
+-		};
++	public:
++		SocketInputStreamNetwork(Socket *socket, int queueIdx);
++
++		virtual int read();
++		virtual int read(byteArray b);
++		virtual int read(byteArray b, unsigned int offset, unsigned int length);
++		virtual void close();
++		virtual __int64 skip(__int64 n) { return n; } // 4J Stu - Not implemented
++		virtual void flush() {}
++	};
+ 	class SocketOutputStreamNetwork : public SocketOutputStream
+ 	{
+ 		bool m_streamOpen;
+ 		int	m_queueIdx;
+ 		Socket *m_socket;
+-		public:
+-			SocketOutputStreamNetwork(Socket *socket, int queueIdx);
+-
+-			virtual void write(unsigned int b);
+-			virtual void write(byteArray b);
+-			virtual void write(byteArray b, unsigned int offset, unsigned int length);
+-			virtual void writeWithFlags(byteArray b, unsigned int offset, unsigned int length, int flags);
+-			virtual void close();
+-			virtual void flush() {}
+-			virtual bool isDirectTcpTransport() const;
+-		};
++	public:
++		SocketOutputStreamNetwork(Socket *socket, int queueIdx);
++
++		virtual void write(unsigned int b);
++		virtual void write(byteArray b);
++		virtual void write(byteArray b, unsigned int offset, unsigned int length);
++		virtual void writeWithFlags(byteArray b, unsigned int offset, unsigned int length, int flags);
++		virtual void close();
++		virtual void flush() {}
++	};
+ 	
+ 	bool m_hostServerConnection;			// true if this is the connection between the host player and server
+ 	bool m_hostLocal;						// true if this player on the same machine as the host
+ 	int m_end;								// 0 for client side or 1 for host side
+-	bool m_useTcpTransport;					// true if this socket uses OS-level TCP transport
+-	bool m_tcpAcceptedServerSide;			// true if this socket came from the TCP listener
+-	unsigned long long m_tcpSocketHandle;
+-	C4JThread *m_tcpReadThread;
+-	volatile int m_tcpReadRunning;
+-	INetworkPlayer *m_directNetworkPlayer;
+ 
+ 	// For local connections between the host player and the server
+ 	static CRITICAL_SECTION s_hostQueueLock[2]; 
+@@ -115,52 +106,21 @@ private:
+ 
+ 	// Host only connection class
+ 	static ServerConnection *s_serverConnection;
+-	static C4JThread *s_tcpAcceptThread;
+-	static volatile int s_tcpAcceptRunning;
+-	static unsigned long long s_tcpListenSocketHandle;
+-	static unsigned char s_nextTcpSmallId;
+-	static bool s_tcpSubsystemInitialised;
+-	static CRITICAL_SECTION s_directPlayersLock;
+-	static bool s_directPlayersLockInitialised;
+-	static std::vector<INetworkPlayer *> s_directPlayers;
+-	static wstring s_lastDirectConnectHost;
+-	static int s_lastDirectConnectPort;
+ 
+ 	BYTE networkPlayerSmallId;
+-
+-	static void RegisterDirectPlayer(INetworkPlayer *player);
+-	static void UnregisterDirectPlayer(INetworkPlayer *player);
+-	void initialiseNetworkQueues(bool response, bool hostLocal);
+-	void enqueueReceivedData(const BYTE *pbData, unsigned int dataSize);
+-	bool initialiseDirectSocket(unsigned long long connectedSocketHandle, bool serverSide);
+-	bool connectDirectSocket(const wstring& ip, int port);
+-	bool sendDirectData(const BYTE *pbData, unsigned int dataSize);
+-	void closeDirectSocket();
+-	static bool EnsureTcpSubsystem();
+-	static int DirectSocketReadThreadProc(void *lpParam);
+-	static int DirectSocketAcceptThreadProc(void *lpParam);
+ public:	
+ 	C4JThread::Event* m_socketClosedEvent;
+ 
+ 	INetworkPlayer *getPlayer();
+ 	void setPlayer(INetworkPlayer *player);
+-	void setDirectPlayerOnlineName(const wstring& onlineName);
+ 
+ public:
+ 	static void Initialise(ServerConnection *serverConnection);
+-	static void StartTcpServerListener(const wstring& bindAddress, int port);
+-	static void StopTcpServerListener();
+-	static bool GetLastDirectConnectEndpoint(wstring *host, int *port);
+ 	Socket(bool response = false);								// 4J - Create a local socket, for end 0 or 1 of a connection
+-	Socket(const wstring& ip, int port);						// Create a direct TCP client socket
+-	Socket(unsigned long long connectedSocketHandle, bool serverSide); // Create a direct TCP socket from an accepted connection
+ 	Socket(INetworkPlayer *player, bool response  = false, bool hostLocal = false);		// 4J - Create a socket for an INetworkPlayer
+ 	SocketAddress *getRemoteSocketAddress();
+ 	void pushDataToQueue(const BYTE * pbData, DWORD dwDataSize, bool fromHost = true);
+ 	static void addIncomingSocket(Socket *socket);
+-	static int GetDirectPlayerCount();
+-	static INetworkPlayer *GetDirectPlayerByIndex(int index);
+-	static INetworkPlayer *GetDirectPlayerBySmallId(unsigned char smallId);
+ 	InputStream *getInputStream(bool isServerConnection);
+ 	void setSoTimeout(int a );
+ 	void setTrafficClass( int a );
+@@ -168,8 +128,7 @@ public:
+ 	bool close(bool isServerConnection);
+ 	bool createdOk;
+ 	bool isLocal() { return m_hostLocal; }
+-	bool isTcpTransport() const { return m_useTcpTransport; }
+ 
+ 	bool isClosing() { return m_endClosed[SOCKET_CLIENT_END] || m_endClosed[SOCKET_SERVER_END]; }
+ 	BYTE getSmallId() { return networkPlayerSmallId; }
+-};
++};
+\ No newline at end of file
+diff --git a/Minecraft.World/compression.cpp b/Minecraft.World/compression.cpp
+index fa3a62b2..99c5228a 100644
+--- a/Minecraft.World/compression.cpp
++++ b/Minecraft.World/compression.cpp
+@@ -10,76 +10,6 @@
+ #include "..\Minecraft.Client\PS3\PS3Extras\EdgeZLib.h"
+ #endif //__PS3__
+ 
+-namespace
+-{
+-	unsigned int ReadBigEndianU32(const void *data)
+-	{
+-		const unsigned char *bytes = (const unsigned char *)data;
+-		return ((unsigned int)bytes[0] << 24) |
+-		       ((unsigned int)bytes[1] << 16) |
+-		       ((unsigned int)bytes[2] << 8)  |
+-		       (unsigned int)bytes[3];
+-	}
+-
+-	bool LooksLikeZlibStream(const void *source, unsigned int sourceSize)
+-	{
+-		if(source == NULL || sourceSize < 2)
+-		{
+-			return false;
+-		}
+-
+-		const unsigned char *bytes = (const unsigned char *)source;
+-		if((bytes[0] & 0x0f) != Z_DEFLATED)
+-		{
+-			return false;
+-		}
+-
+-		const unsigned int zlibHeader = ((unsigned int)bytes[0] << 8) | (unsigned int)bytes[1];
+-		return (zlibHeader % 31) == 0;
+-	}
+-
+-	HRESULT DecompressRawDeflateWithPs3Header(void *pDestination, unsigned int *pDestSize, void *pSource, unsigned int SrcSize)
+-	{
+-		if(pDestination == NULL || pDestSize == NULL || pSource == NULL || SrcSize <= 4)
+-		{
+-			return -1;
+-		}
+-
+-		const unsigned int expectedSize = ReadBigEndianU32(pSource);
+-		if(expectedSize == 0 || expectedSize > *pDestSize)
+-		{
+-			return -1;
+-		}
+-
+-		z_stream strm;
+-		memset(&strm, 0, sizeof(strm));
+-		strm.next_in = (Bytef *)pSource + 4;
+-		strm.avail_in = SrcSize - 4;
+-		strm.next_out = (Bytef *)pDestination;
+-		strm.avail_out = expectedSize;
+-
+-		int result = inflateInit2(&strm, -15);
+-		if(result != Z_OK)
+-		{
+-			return -1;
+-		}
+-
+-		do
+-		{
+-			result = inflate(&strm, Z_NO_FLUSH);
+-			if(result == Z_NEED_DICT || result == Z_DATA_ERROR || result == Z_MEM_ERROR || result == Z_STREAM_ERROR)
+-			{
+-				inflateEnd(&strm);
+-				return -1;
+-			}
+-		} while(result != Z_STREAM_END);
+-
+-		inflateEnd(&strm);
+-		*pDestSize = (unsigned int)strm.total_out;
+-		return S_OK;
+-	}
+-}
+-
+ 
+ DWORD Compression::tlsIdx = 0;
+ Compression::ThreadStorage *Compression::tlsDefault = NULL;
+@@ -266,29 +196,18 @@ HRESULT Compression::DecompressLZXRLE(void *pDestination, unsigned int *pDestSiz
+ 	unsigned int rleSize = staticRleSize;
+ 	unsigned char *dynamicRleBuf = NULL;
+ 
+-		if(*pDestSize > rleSize)
+-		{
+-			rleSize = *pDestSize;
+-			dynamicRleBuf = new unsigned char[rleSize];
+-			HRESULT result = Decompress(dynamicRleBuf, &rleSize, pSource, SrcSize);
+-			if(result != S_OK)
+-			{
+-				delete [] dynamicRleBuf;
+-				LeaveCriticalSection(&rleDecompressLock);
+-				return result;
+-			}
+-			pucIn = (unsigned char *)dynamicRleBuf;
+-		}
+-		else
+-		{
+-			HRESULT result = Decompress(rleDecompressBuf, &rleSize, pSource, SrcSize);
+-			if(result != S_OK)
+-			{
+-				LeaveCriticalSection(&rleDecompressLock);
+-				return result;
+-			}
+-			pucIn = (unsigned char *)rleDecompressBuf;
+-		}
++	if(*pDestSize > rleSize)
++	{
++		rleSize = *pDestSize;
++		dynamicRleBuf = new unsigned char[rleSize];
++		Decompress(dynamicRleBuf, &rleSize, pSource, SrcSize);
++		pucIn = (unsigned char *)dynamicRleBuf;
++	}
++	else
++	{
++		Decompress(rleDecompressBuf, &rleSize, pSource, SrcSize);
++		pucIn = (unsigned char *)rleDecompressBuf;
++	}
+ 
+ 	//unsigned char *pucIn = (unsigned char *)rleDecompressBuf;
+ 	unsigned char *pucEnd = pucIn + rleSize;
+@@ -401,10 +320,6 @@ HRESULT Compression::Compress(void *pDestination, unsigned int *pDestSize, void
+ 
+ HRESULT Compression::Decompress(void *pDestination, unsigned int *pDestSize, void *pSource, unsigned int SrcSize)
+ {
+-	if(pDestination == NULL || pDestSize == NULL || pSource == NULL)
+-	{
+-		return -1;
+-	}
+ 
+ 	if(m_decompressType != m_localDecompressType)	// check if we're decompressing data from a different platform
+ 	{
+@@ -416,65 +331,13 @@ HRESULT Compression::Decompress(void *pDestination, unsigned int *pDestSize, voi
+ #if defined __ORBIS__ || defined _DURANGO || defined _WIN64 || defined __PSVITA__
+ 	SIZE_T destSize = (SIZE_T)(*pDestSize);
+ 	int res = ::uncompress((Bytef *)pDestination, (uLongf *)&destSize, (Bytef *)pSource, SrcSize);
+-	if(res == Z_OK)
+-	{
+-		*pDestSize = (unsigned int)destSize;
+-		return S_OK;
+-	}
+-
+-	unsigned int rawDestSize = *pDestSize;
+-	if(DecompressRawDeflateWithPs3Header(pDestination, &rawDestSize, pSource, SrcSize) == S_OK)
+-	{
+-		*pDestSize = rawDestSize;
+-		return S_OK;
+-	}
+-
+-	return -1;
++	*pDestSize = (unsigned int)destSize;
++	return ( ( res == Z_OK ) ? S_OK : -1 );
+ #elif defined __PS3__
+-	// Direct TCP cross-platform can send either standard zlib payloads (x64/Orbis/etc)
+-	// or EdgeZLib payloads (PS3 raw deflate + 4-byte uncompressed size header).
+-	if(LooksLikeZlibStream(pSource, SrcSize))
+-	{
+-		uLongf destSize = (uLongf)(*pDestSize);
+-		int zlibRes = ::uncompress((Bytef *)pDestination, &destSize, (Bytef *)pSource, SrcSize);
+-		if(zlibRes == Z_OK)
+-		{
+-			*pDestSize = (unsigned int)destSize;
+-			return S_OK;
+-		}
+-	}
+-
+-	if(SrcSize > 4)
+-	{
+-		const unsigned int expectedSize = ReadBigEndianU32(pSource);
+-		uint32_t destSize = (uint32_t)(*pDestSize);
+-		if(expectedSize > 0 && expectedSize <= destSize)
+-		{
+-			bool edgeRes = EdgeZLib::Decompress(pDestination, &destSize, pSource, SrcSize);
+-			if(edgeRes)
+-			{
+-				*pDestSize = (unsigned int)destSize;
+-				return S_OK;
+-			}
+-		}
+-	}
+-
+-	uLongf destSize = (uLongf)(*pDestSize);
+-	int zlibRes = ::uncompress((Bytef *)pDestination, &destSize, (Bytef *)pSource, SrcSize);
+-	if(zlibRes == Z_OK)
+-	{
+-		*pDestSize = (unsigned int)destSize;
+-		return S_OK;
+-	}
+-
+-	unsigned int rawDestSize = *pDestSize;
+-	if(DecompressRawDeflateWithPs3Header(pDestination, &rawDestSize, pSource, SrcSize) == S_OK)
+-	{
+-		*pDestSize = rawDestSize;
+-		return S_OK;
+-	}
+-
+-	return -1;
++	uint32_t destSize = (uint32_t)(*pDestSize);
++	bool res = EdgeZLib::Decompress(pDestination, &destSize, pSource, SrcSize);
++	*pDestSize = (unsigned int)destSize;
++	return ( ( res ) ? S_OK : -1 );
+ #else
+ 	SIZE_T destSize = (SIZE_T)(*pDestSize);
+ 	HRESULT res = XMemDecompress(decompressionContext, pDestination, (SIZE_T *)&destSize, pSource, SrcSize);
+@@ -679,3 +542,5 @@ void Compression::SetDecompressionType(ESavePlatform platform)
+ }
+ 
+ /*Compression gCompression;*/
++
++
+diff --git a/MinecraftConsoles.sln b/MinecraftConsoles.sln
+index 5899d2c6..4d3b37f2 100644
+--- a/MinecraftConsoles.sln
++++ b/MinecraftConsoles.sln
+@@ -58,7 +58,6 @@ Global
+ 		ReleaseForArt|PSVita = ReleaseForArt|PSVita
+ 		ReleaseForArt|Windows64 = ReleaseForArt|Windows64
+ 		ReleaseForArt|Xbox 360 = ReleaseForArt|Xbox 360
+-		Server|Windows64 = Server|Windows64
+ 	EndGlobalSection
+ 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+ 		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.ContentPackage_NO_TU|Durango.ActiveCfg = ContentPackage_NO_TU|Durango
+@@ -131,8 +130,6 @@ Global
+ 		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.ReleaseForArt|Windows64.ActiveCfg = ReleaseForArt|x64
+ 		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.ReleaseForArt|Xbox 360.ActiveCfg = ReleaseForArt|Xbox 360
+ 		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.ReleaseForArt|Xbox 360.Build.0 = ReleaseForArt|Xbox 360
+-		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|Windows64.ActiveCfg = Release|x64
+-		{F046C3CE-9749-4823-B32B-D9CC10B1A2C8}.Server|Windows64.Build.0 = Release|x64
+ 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ContentPackage_NO_TU|Durango.ActiveCfg = ContentPackage_NO_TU|Durango
+ 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ContentPackage_NO_TU|Durango.Build.0 = ContentPackage_NO_TU|Durango
+ 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ContentPackage_NO_TU|ORBIS.ActiveCfg = ContentPackage_NO_TU|ORBIS
+@@ -206,8 +203,6 @@ Global
+ 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ReleaseForArt|Windows64.ActiveCfg = ReleaseForArt|x64
+ 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ReleaseForArt|Xbox 360.ActiveCfg = Release|Xbox 360
+ 		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.ReleaseForArt|Xbox 360.Build.0 = Release|Xbox 360
+-		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|Windows64.ActiveCfg = Release|x64
+-		{1B9A8C38-DD48-448C-AA24-E1A35E0089A3}.Server|Windows64.Build.0 = Release|x64
+ 	EndGlobalSection
+ 	GlobalSection(SolutionProperties) = preSolution
+ 		HideSolutionNode = FALSE

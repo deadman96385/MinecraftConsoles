@@ -96,9 +96,10 @@ public:
 	wstring progressStatus;
     int progress;
 private:
-//	vector<Tickable *> tickables = new ArrayList<Tickable>();	// 4J - removed
+	//	vector<Tickable *> tickables = new ArrayList<Tickable>();	// 4J - removed
 	CommandDispatcher *commandDispatcher;
-    vector<ConsoleInput *> consoleInput;	// 4J - was synchronizedList - TODO - investigate
+	vector<ConsoleInput *> consoleInput;	// 4J - was synchronizedList - TODO - investigate
+	CRITICAL_SECTION m_consoleInputCS;
 public:
     bool onlineMode;
     bool animals;

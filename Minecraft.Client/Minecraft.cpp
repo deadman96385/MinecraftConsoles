@@ -27,6 +27,7 @@
 #include "DeathScreen.h"
 #include "ErrorScreen.h"
 #include "TitleScreen.h"
+#include "ConnectScreen.h"
 #include "InventoryScreen.h"
 #include "InBedChatScreen.h"
 #include "AchievementPopup.h"
@@ -87,6 +88,15 @@ __int64 Minecraft::tickTimes[512];
 int Minecraft::frameTimePos = 0;
 __int64 Minecraft::warezTime = 0;
 File Minecraft::workDir = File(L"");
+
+#if defined(__PS3__)
+#ifndef PS3_BOOT_DIRECT_CONNECT_HOST
+#define PS3_BOOT_DIRECT_CONNECT_HOST L""
+#endif
+#ifndef PS3_BOOT_DIRECT_CONNECT_PORT
+#define PS3_BOOT_DIRECT_CONNECT_PORT 25565
+#endif
+#endif
 
 #ifdef __PSVITA__
 
@@ -406,9 +416,27 @@ void Minecraft::init()
 	MemSect(0);
 	gui = new Gui(this);
 
+	#if defined(__PS3__)
+	if(connectToIp.empty())
+	{
+		const wchar_t *bootDirectHost = PS3_BOOT_DIRECT_CONNECT_HOST;
+		if(bootDirectHost != NULL && bootDirectHost[0] != L'\0')
+		{
+			connectToIp = bootDirectHost;
+			connectToPort = PS3_BOOT_DIRECT_CONNECT_PORT;
+			app.DebugPrintf("PS3 boot direct connect target %ls:%d\n", connectToIp.c_str(), connectToPort);
+		}
+	}
+	#endif
+
 	if (connectToIp != L"")	// 4J - was NULL comparison
 	{
-		//        setScreen(new ConnectScreen(this, connectToIp, connectToPort));		// 4J TODO - put back in
+		int connectPort = connectToPort;
+		if(connectPort <= 0 || connectPort > 65535)
+		{
+			connectPort = 25565;
+		}
+		setScreen(new ConnectScreen(this, connectToIp, connectPort));
 	}
 	else
 	{
@@ -1810,6 +1838,7 @@ void Minecraft::run_middle()
 				ticks++;
 				//            try {		// 4J - try/catch removed
 				bool bFirst = true;
+				bool bTickedAnyLocalPlayer = false;
 				for( int idx = 0; idx < XUSER_MAX_COUNT; idx++ )
 				{
 					// 4J - If we are waiting for this connection to do something, then tick it here.
@@ -1854,8 +1883,21 @@ void Minecraft::run_middle()
 					{
 						tick(bFirst, bLastTimerTick);
 						bFirst = false;
+						bTickedAnyLocalPlayer = true;
 						// clear the stored button downs since the tick for this player will now have actioned them
 						player->ullButtonsPressed=0LL;
+					}
+				}
+
+				// Menus can run with no local players, so ConnectScreen must be ticked here
+				// or direct TCP joins will send PreLogin but never process the response.
+				if(!bTickedAnyLocalPlayer && screen != NULL && dynamic_cast<ConnectScreen *>(screen) != NULL)
+				{
+					screen->updateEvents();
+					if(screen != NULL)
+					{
+						screen->particles->tick();
+						screen->tick();
 					}
 				}
 
@@ -5026,4 +5068,3 @@ int Minecraft::MustSignInReturnedPSN(void *pParam, int iPad, C4JStorage::EMessag
     return 0;
 }
 #endif
-

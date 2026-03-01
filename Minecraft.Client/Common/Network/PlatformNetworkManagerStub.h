@@ -10,6 +10,8 @@ class CPlatformNetworkManagerStub : public CPlatformNetworkManager
 {
 	friend class CGameNetworkManager;
 public:
+	CPlatformNetworkManagerStub();
+
 	virtual bool Initialise(CGameNetworkManager *pGameNetworkManager, int flagIndexSize);
 	virtual void Terminate();
 	virtual int GetJoiningReadyPercentage();

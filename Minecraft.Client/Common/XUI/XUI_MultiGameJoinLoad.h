@@ -119,6 +119,7 @@ private:
 	static int CopySaveReturned(void *pParam,bool bResult);
 	static int LoadSaveDataForRenameReturned(void *pParam,bool bContinue);
 	static int KeyboardReturned(void *pParam,bool bSet);
+	static int KeyboardDirectConnectReturned(void *pParam,bool bSet);
 	static void StartGameFromSave(CScene_MultiGameJoinLoad* pClass, DWORD dwLocalUsersMask);
 	static int TexturePackDialogReturned(void *pParam,int iPad,C4JStorage::EMessageResult result);
 	static int SaveTransferDialogReturned(void *pParam,int iPad,C4JStorage::EMessageResult result);
@@ -150,6 +151,7 @@ private:
 	bool m_bRetrievingSaveInfo;
 	//bool m_bSaveRenamed;
 	WCHAR m_wchNewName[XCONTENT_MAX_DISPLAYNAME_LENGTH];
+	wstring m_directConnectAddress;
 	unsigned char m_szSeed[50];
 
 	vector<LevelGenerationOptions *> *m_generators;

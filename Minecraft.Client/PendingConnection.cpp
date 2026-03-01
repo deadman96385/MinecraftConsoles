@@ -71,6 +71,7 @@ void PendingConnection::disconnect(DisconnectPacket::eDisconnectReason reason)
 
 void PendingConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
 {
+	app.DebugPrintf("Server received PreLogin: netVersion=%d loginKey='%ls'\n", packet->m_netcodeVersion, packet->loginKey.c_str());
     if (packet->m_netcodeVersion != MINECRAFT_NET_VERSION)
 	{
 		app.DebugPrintf("Netcode version is %d not equal to %d\n", packet->m_netcodeVersion, MINECRAFT_NET_VERSION);
@@ -86,7 +87,12 @@ void PendingConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
     }
 //	printf("Server: handlePreLogin\n");
 	name = packet->loginKey; // 4J Stu - Change from the login packet as we know better on client end during the pre-login packet
+	if(connection != NULL && connection->getSocket() != NULL)
+	{
+		connection->getSocket()->setDirectPlayerOnlineName(name);
+	}
 	sendPreLoginResponse();
+	app.DebugPrintf("Server sending PreLogin response for '%ls'\n", name.c_str());
 }
 
 void PendingConnection::sendPreLoginResponse()

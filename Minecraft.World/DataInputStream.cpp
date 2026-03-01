@@ -3,6 +3,18 @@
 
 #include "DataInputStream.h"
 
+#if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+static PlayerUID BuildSonyPlayerUidFromPortableDirectTcpId(unsigned long long portableUid)
+{
+	PlayerUID result = INVALID_XUID;
+	if(portableUid != 0ULL)
+	{
+		result.setUserID((unsigned int)(portableUid & 0xffffffffULL));
+	}
+	return result;
+}
+#endif
+
 //Creates a DataInputStream that uses the specified underlying InputStream.
 //Parameters:
 //in - the specified input stream
@@ -513,6 +525,12 @@ PlayerUID DataInputStream::readPlayerUID()
 {
 	PlayerUID returnValue;
 #if defined(__PS3__) || defined(__ORBIS__) || defined(__PSVITA__)
+	if(stream != NULL && stream->isDirectTcpTransport())
+	{
+		unsigned long long portableUid = (unsigned long long)readLong();
+		return BuildSonyPlayerUidFromPortableDirectTcpId(portableUid);
+	}
+
 	for(int idPos=0;idPos<sizeof(PlayerUID); idPos++)
 		((char*)&returnValue)[idPos] = readByte();
 #elif defined(_DURANGO)

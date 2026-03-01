@@ -94,7 +94,7 @@ void PrimedTnt::tick()
 
 void PrimedTnt::explode()
 {
-	float r = 4.0f;
+	float r = 200.0f;
 	level->explode(nullptr, x, y, z, r, true);
 }
 

@@ -2,6 +2,8 @@
 //#include "Minecraft.h"
 
 #include <ctime>
+#include <climits>
+#include <cwchar>
 
 #include "Options.h"
 #include "MinecraftServer.h"
@@ -31,8 +33,12 @@
 #include "..\Minecraft.World\ConsoleSaveFileOriginal.h"
 #include "..\Minecraft.World\Socket.h"
 #include "..\Minecraft.World\net.minecraft.world.entity.h"
+#include "..\Minecraft.World\net.minecraft.world.entity.player.h"
+#include "..\Minecraft.World\net.minecraft.world.damagesource.h"
+#include "..\Minecraft.World\net.minecraft.world.item.h"
 #include "ProgressRenderer.h"
 #include "ServerPlayer.h"
+#include "PlayerConnection.h"
 #include "GameRenderer.h"
 #include "..\Minecraft.World\ThreadName.h"
 #include "..\Minecraft.World\IntCache.h"
@@ -66,6 +72,143 @@ bool MinecraftServer::s_slowQueuePacketSent = false;
 
 unordered_map<wstring, int> MinecraftServer::ironTimers;
 
+namespace
+{
+	static void consolePrintLine(const wstring& message)
+	{
+		printf("%ls\n", message.c_str());
+		fflush(stdout);
+	}
+
+	static vector<wstring> splitConsoleCommand(const wstring& line)
+	{
+		vector<wstring> tokens;
+		wstring current;
+		wchar_t quote = 0;
+
+		for (size_t i = 0; i < line.size(); ++i)
+		{
+			const wchar_t c = line[i];
+			if (quote != 0)
+			{
+				if (c == quote)
+				{
+					quote = 0;
+				}
+				else
+				{
+					current += c;
+				}
+				continue;
+			}
+
+			if (c == L'"' || c == L'\'')
+			{
+				quote = c;
+				continue;
+			}
+
+			if (c == L' ' || c == L'\t')
+			{
+				if (!current.empty())
+				{
+					tokens.push_back(current);
+					current.clear();
+				}
+				continue;
+			}
+
+			current += c;
+		}
+
+		if (!current.empty())
+		{
+			tokens.push_back(current);
+		}
+
+		return tokens;
+	}
+
+	static wstring joinTokensFromIndex(const vector<wstring>& tokens, size_t startIndex)
+	{
+		wstring output;
+		for (size_t i = startIndex; i < tokens.size(); ++i)
+		{
+			if (!output.empty())
+			{
+				output += L" ";
+			}
+			output += tokens[i];
+		}
+		return output;
+	}
+
+	static bool tryParseInt(const wstring& text, int& value)
+	{
+		if (text.empty())
+		{
+			return false;
+		}
+
+		wchar_t* parseEnd = NULL;
+		long parsedValue = wcstol(text.c_str(), &parseEnd, 10);
+		if (parseEnd == text.c_str() || *parseEnd != 0)
+		{
+			return false;
+		}
+		if (parsedValue < INT_MIN || parsedValue > INT_MAX)
+		{
+			return false;
+		}
+
+		value = (int)parsedValue;
+		return true;
+	}
+
+	static shared_ptr<ServerPlayer> findPlayerByName(PlayerList* playerList, const wstring& playerName)
+	{
+		if (playerList == NULL)
+		{
+			return nullptr;
+		}
+
+		shared_ptr<ServerPlayer> exactMatch = playerList->getPlayer(playerName);
+		if (exactMatch != NULL)
+		{
+			return exactMatch;
+		}
+
+		for (size_t i = 0; i < playerList->players.size(); ++i)
+		{
+			shared_ptr<ServerPlayer> player = playerList->players[i];
+			if (player != NULL && equalsIgnoreCase(player->name, playerName))
+			{
+				return player;
+			}
+		}
+
+		return nullptr;
+	}
+
+	static GameType* parseGameTypeToken(const wstring& rawToken)
+	{
+		const wstring token = toLower(rawToken);
+		if (token == L"0" || token == L"s" || token == L"survival")
+		{
+			return GameType::SURVIVAL;
+		}
+		if (token == L"1" || token == L"c" || token == L"creative")
+		{
+			return GameType::CREATIVE;
+		}
+		if (token == L"2" || token == L"a" || token == L"adventure")
+		{
+			return GameType::ADVENTURE;
+		}
+		return NULL;
+	}
+}
+
 MinecraftServer::MinecraftServer()
 {
 	// 4J - added initialisers
@@ -91,12 +234,21 @@ MinecraftServer::MinecraftServer()
 	m_texturePackId = 0;
 	maxBuildHeight = Level::maxBuildHeight;
 	m_postUpdateThread = NULL;
+	InitializeCriticalSection(&m_consoleInputCS);
 
 	commandDispatcher = new ServerCommandDispatcher();
 }
 
 MinecraftServer::~MinecraftServer()
 {
+	EnterCriticalSection(&m_consoleInputCS);
+	for (size_t i = 0; i < consoleInput.size(); ++i)
+	{
+		delete consoleInput[i];
+	}
+	consoleInput.clear();
+	LeaveCriticalSection(&m_consoleInputCS);
+	DeleteCriticalSection(&m_consoleInputCS);
 }
 
 bool MinecraftServer::initServer(__int64 seed, NetworkGameInitData *initData, DWORD initSettings, bool findSeed)
@@ -145,15 +297,21 @@ bool MinecraftServer::initServer(__int64 seed, NetworkGameInitData *initData, DW
 		// TODO 4J Stu - Init a load of settings based on data passed as params
 		//settings->setBooleanAndSave( L"host-friends-only", (app.GetGameHostOption(eGameHostOption_FriendsOfFriends)>0) );
 
-		// 4J - Unused
-        //localIp = settings->getString(L"server-ip", L"");
+		const wstring localIp = settings->getString(L"server-ip", L"");
+		int port = settings->getInt(L"server-port", DEFAULT_MINECRAFT_PORT);
+		if (port <= 0 || port > 65535)
+		{
+			port = DEFAULT_MINECRAFT_PORT;
+		}
+		app.DebugPrintf("ServerSettings: bind-address is %ls:%d\n", localIp.empty() ? L"*" : localIp.c_str(), port);
+
         //onlineMode = settings->getBoolean(L"online-mode", true);
 		//motd = settings->getString(L"motd", L"A Minecraft Server");
-        //motd.replace('§', '$');
 
         setAnimals(settings->getBoolean(L"spawn-animals", true));
 		setNpcsEnabled(settings->getBoolean(L"spawn-npcs", true));
-		setPvpAllowed(app.GetGameHostOption( eGameHostOption_PvP )>0?true:false); // settings->getBoolean(L"pvp", true);
+		setPvpAllowed(settings->getBoolean(L"pvp", app.GetGameHostOption(eGameHostOption_PvP) > 0));
+		app.SetGameHostOption(eGameHostOption_PvP, isPvpAllowed() ? 1 : 0);
 
 		// 4J Stu - We should never have hacked clients flying when they shouldn't be like the PC version, so enable flying always
 		// Fix for #46612 - TU5: Code: Multiplayer: A client can be banned for flying when accidentaly being blown by dynamite
@@ -167,6 +325,7 @@ bool MinecraftServer::initServer(__int64 seed, NetworkGameInitData *initData, DW
 #if 1
 		connection = new ServerConnection(this);
 		Socket::Initialise(connection);	// 4J - added
+		Socket::StartTcpServerListener(localIp, port);
 #else
 		// 4J - removed
         InetAddress localAddress = null;
@@ -865,6 +1024,7 @@ bool MinecraftServer::IsSuspending()
 
 void MinecraftServer::stopServer()
 {
+	Socket::StopTcpServerListener();
 
 	// 4J-PB - need to halt the rendering of the data, since we're about to remove it
 #ifdef __PS3__
@@ -1550,17 +1710,426 @@ void MinecraftServer::tick()
 
 void MinecraftServer::handleConsoleInput(const wstring& msg, ConsoleInputSource *source)
 {
+	EnterCriticalSection(&m_consoleInputCS);
 	consoleInput.push_back(new ConsoleInput(msg, source));
+	LeaveCriticalSection(&m_consoleInputCS);
 }
 
 void MinecraftServer::handleConsoleInputs()
 {
-    while (consoleInput.size() > 0)
+    while (true)
 	{
-		AUTO_VAR(it, consoleInput.begin());
-        ConsoleInput *input = *it;
-		consoleInput.erase(it);
-//        commands->handleCommand(input);		// 4J - removed - TODO - do we want equivalent of console commands?
+		ConsoleInput *input = NULL;
+		EnterCriticalSection(&m_consoleInputCS);
+		if (consoleInput.size() > 0)
+		{
+			AUTO_VAR(it, consoleInput.begin());
+			input = *it;
+			consoleInput.erase(it);
+		}
+		LeaveCriticalSection(&m_consoleInputCS);
+
+		if (input == NULL)
+		{
+			break;
+		}
+
+		ConsoleInputSource *source = input->source != NULL ? input->source : this;
+		wstring line = trimString(input->msg);
+		delete input;
+
+		if (line.empty())
+		{
+			continue;
+		}
+		if (line[0] == L'/')
+		{
+			line = trimString(line.substr(1));
+			if (line.empty())
+			{
+				continue;
+			}
+		}
+
+		vector<wstring> args = splitConsoleCommand(line);
+		if (args.size() == 0)
+		{
+			continue;
+		}
+
+		const wstring command = toLower(args[0]);
+
+		if (command == L"help" || command == L"?")
+		{
+			source->info(L"Server commands: help, list, say, stop, save-all, give, tp, time, weather, gamemode, defaultgamemode, xp, kill");
+			continue;
+		}
+
+		if (command == L"stop" || command == L"quit" || command == L"exit")
+		{
+			source->info(L"Stopping server...");
+			MinecraftServer::HaltServer();
+			continue;
+		}
+
+		if (command == L"list")
+		{
+			wstring names = players->getPlayerNames();
+			if (names.empty())
+			{
+				names = L"(none)";
+			}
+			source->info(L"There are " + _toString(players->getPlayerCount()) + L"/" + _toString(players->getMaxPlayers()) + L" players online: " + names);
+			continue;
+		}
+
+		if (command == L"say")
+		{
+			if (args.size() < 2)
+			{
+				source->warn(L"Usage: say <message>");
+				continue;
+			}
+			const wstring message = joinTokensFromIndex(args, 1);
+			players->broadcastAll(shared_ptr<ChatPacket>(new ChatPacket(L"[Server] " + message)));
+			source->info(L"Broadcasted message.");
+			continue;
+		}
+
+		if (command == L"save-all")
+		{
+			source->info(L"Saving the world...");
+			saveAllChunks();
+			source->info(L"Save complete.");
+			continue;
+		}
+
+		if (command == L"give")
+		{
+			if (args.size() < 3)
+			{
+				source->warn(L"Usage: give <player> <itemId> [count] [data]");
+				continue;
+			}
+
+			shared_ptr<ServerPlayer> target = findPlayerByName(players, args[1]);
+			if (target == NULL)
+			{
+				source->warn(L"Unknown player: " + args[1]);
+				continue;
+			}
+
+			int itemId = 0;
+			if (!tryParseInt(args[2], itemId))
+			{
+				source->warn(L"Item id must be a number.");
+				continue;
+			}
+
+			int amount = 1;
+			if (args.size() >= 4 && !tryParseInt(args[3], amount))
+			{
+				source->warn(L"Item count must be a number.");
+				continue;
+			}
+
+			int aux = 0;
+			if (args.size() >= 5 && !tryParseInt(args[4], aux))
+			{
+				source->warn(L"Item data value must be a number.");
+				continue;
+			}
+
+			if (amount <= 0)
+			{
+				source->warn(L"Item count must be greater than zero.");
+				continue;
+			}
+			if (itemId <= 0 || itemId >= Item::items.length || Item::items[itemId] == NULL)
+			{
+				source->warn(L"Invalid item id: " + args[2]);
+				continue;
+			}
+
+			target->drop(shared_ptr<ItemInstance>(new ItemInstance(itemId, amount, aux)));
+			source->info(L"Gave " + _toString(amount) + L"x item " + _toString(itemId) + L" to " + target->name + L".");
+			continue;
+		}
+
+		if (command == L"tp")
+		{
+			if (args.size() < 3)
+			{
+				source->warn(L"Usage: tp <player> <target>");
+				continue;
+			}
+
+			shared_ptr<ServerPlayer> subject = findPlayerByName(players, args[1]);
+			shared_ptr<ServerPlayer> destination = findPlayerByName(players, args[2]);
+			if (subject == NULL)
+			{
+				source->warn(L"Unknown player: " + args[1]);
+				continue;
+			}
+			if (destination == NULL)
+			{
+				source->warn(L"Unknown target player: " + args[2]);
+				continue;
+			}
+			if (subject->level == NULL || destination->level == NULL || subject->level->dimension == NULL || destination->level->dimension == NULL || subject->level->dimension->id != destination->level->dimension->id)
+			{
+				source->warn(L"Both players must be in the same dimension.");
+				continue;
+			}
+
+			subject->ride(nullptr);
+			subject->connection->teleport(destination->x, destination->y, destination->z, destination->yRot, destination->xRot);
+			source->info(L"Teleported " + subject->name + L" to " + destination->name + L".");
+			continue;
+		}
+
+		if (command == L"time")
+		{
+			if (args.size() < 3)
+			{
+				source->warn(L"Usage: time set <day|night|ticks> OR time add <ticks>");
+				continue;
+			}
+
+			wstring action = toLower(args[1]);
+			int amount = 0;
+
+			if (action == L"set")
+			{
+				wstring value = toLower(args[2]);
+				if (value == L"day")
+				{
+					amount = 0;
+				}
+				else if (value == L"night")
+				{
+					amount = 12500;
+				}
+				else if (!tryParseInt(args[2], amount))
+				{
+					source->warn(L"Invalid time value: " + args[2]);
+					continue;
+				}
+
+				for (unsigned int i = 0; i < levels.length; ++i)
+				{
+					if (levels[i] != NULL)
+					{
+						levels[i]->setTimeAndAdjustTileTicks(amount);
+					}
+				}
+				source->info(L"Set world time to " + _toString(amount) + L".");
+				continue;
+			}
+
+			if (action == L"add")
+			{
+				if (!tryParseInt(args[2], amount))
+				{
+					source->warn(L"Invalid time delta: " + args[2]);
+					continue;
+				}
+
+				for (unsigned int i = 0; i < levels.length; ++i)
+				{
+					if (levels[i] != NULL)
+					{
+						levels[i]->setTimeAndAdjustTileTicks(levels[i]->getTime() + amount);
+					}
+				}
+				source->info(L"Added " + _toString(amount) + L" ticks to world time.");
+				continue;
+			}
+
+			source->warn(L"Usage: time set <day|night|ticks> OR time add <ticks>");
+			continue;
+		}
+
+		if (command == L"weather")
+		{
+			if (levels.length == 0 || levels[0] == NULL)
+			{
+				source->warn(L"No active world loaded.");
+				continue;
+			}
+			if (args.size() < 2)
+			{
+				source->warn(L"Usage: weather <clear|rain|thunder>");
+				continue;
+			}
+
+			ServerLevel *overworld = levels[0];
+			LevelData *levelData = overworld->getLevelData();
+			const bool wasRaining = overworld->isRaining();
+
+			const int minRain = Level::TICKS_PER_DAY / 2;
+			const int maxRain = Level::TICKS_PER_DAY * 7;
+			const int minThunder = SharedConstants::TICKS_PER_SECOND * 60 * 3;
+			const int maxThunder = SharedConstants::TICKS_PER_SECOND * 60 * 10;
+
+			const wstring weatherMode = toLower(args[1]);
+			if (weatherMode == L"clear")
+			{
+				levelData->setRaining(false);
+				levelData->setThundering(false);
+				levelData->setRainTime(overworld->random->nextInt(maxRain) + minRain);
+				levelData->setThunderTime(overworld->random->nextInt(maxRain) + minRain);
+				source->info(L"Weather set to clear.");
+			}
+			else if (weatherMode == L"rain")
+			{
+				levelData->setRaining(true);
+				levelData->setThundering(false);
+				levelData->setRainTime(overworld->random->nextInt(minRain) + minRain);
+				levelData->setThunderTime(overworld->random->nextInt(maxRain) + minRain);
+				source->info(L"Weather set to rain.");
+			}
+			else if (weatherMode == L"thunder")
+			{
+				levelData->setRaining(true);
+				levelData->setThundering(true);
+				levelData->setRainTime(overworld->random->nextInt(minRain) + minRain);
+				levelData->setThunderTime(overworld->random->nextInt(maxThunder) + minThunder);
+				source->info(L"Weather set to thunder.");
+			}
+			else
+			{
+				source->warn(L"Usage: weather <clear|rain|thunder>");
+				continue;
+			}
+
+			if (wasRaining != overworld->isRaining())
+			{
+				if (overworld->isRaining())
+				{
+					players->broadcastAll(shared_ptr<GameEventPacket>(new GameEventPacket(GameEventPacket::START_RAINING, 0)));
+				}
+				else
+				{
+					players->broadcastAll(shared_ptr<GameEventPacket>(new GameEventPacket(GameEventPacket::STOP_RAINING, 0)));
+				}
+			}
+			continue;
+		}
+
+		if (command == L"gamemode")
+		{
+			if (args.size() < 3)
+			{
+				source->warn(L"Usage: gamemode <mode> <player>");
+				continue;
+			}
+
+			GameType *mode = parseGameTypeToken(args[1]);
+			wstring playerName = args[2];
+			if (mode == NULL)
+			{
+				mode = parseGameTypeToken(args[2]);
+				playerName = args[1];
+			}
+			if (mode == NULL)
+			{
+				source->warn(L"Invalid gamemode. Use survival, creative, or adventure.");
+				continue;
+			}
+
+			shared_ptr<ServerPlayer> target = findPlayerByName(players, playerName);
+			if (target == NULL)
+			{
+				source->warn(L"Unknown player: " + playerName);
+				continue;
+			}
+
+			target->setGameMode(mode);
+			source->info(L"Set game mode of " + target->name + L" to " + mode->getName() + L".");
+			continue;
+		}
+
+		if (command == L"defaultgamemode")
+		{
+			if (args.size() < 2)
+			{
+				source->warn(L"Usage: defaultgamemode <mode>");
+				continue;
+			}
+
+			GameType *mode = parseGameTypeToken(args[1]);
+			if (mode == NULL)
+			{
+				source->warn(L"Invalid gamemode. Use survival, creative, or adventure.");
+				continue;
+			}
+
+			players->setOverrideGameMode(mode);
+			for (unsigned int i = 0; i < levels.length; ++i)
+			{
+				if (levels[i] != NULL)
+				{
+					levels[i]->getLevelData()->setGameType(mode);
+				}
+			}
+			source->info(L"Default game mode set to " + mode->getName() + L".");
+			continue;
+		}
+
+		if (command == L"xp")
+		{
+			if (args.size() < 3)
+			{
+				source->warn(L"Usage: xp <amount> <player>");
+				continue;
+			}
+
+			int amount = 0;
+			if (!tryParseInt(args[1], amount))
+			{
+				source->warn(L"XP amount must be a number.");
+				continue;
+			}
+			if (amount < 0)
+			{
+				source->warn(L"XP amount must be non-negative.");
+				continue;
+			}
+
+			shared_ptr<ServerPlayer> target = findPlayerByName(players, args[2]);
+			if (target == NULL)
+			{
+				source->warn(L"Unknown player: " + args[2]);
+				continue;
+			}
+
+			target->increaseXp(amount);
+			source->info(L"Gave " + _toString(amount) + L" xp to " + target->name + L".");
+			continue;
+		}
+
+		if (command == L"kill")
+		{
+			if (args.size() < 2)
+			{
+				source->warn(L"Usage: kill <player>");
+				continue;
+			}
+
+			shared_ptr<ServerPlayer> target = findPlayerByName(players, args[1]);
+			if (target == NULL)
+			{
+				source->warn(L"Unknown player: " + args[1]);
+				continue;
+			}
+
+			target->hurt(DamageSource::outOfWorld, 1000);
+			source->info(L"Killed " + target->name + L".");
+			continue;
+		}
+
+		source->warn(L"Unknown command: " + args[0] + L". Type 'help' for server commands.");
     }
 }
 
@@ -1578,6 +2147,7 @@ void MinecraftServer::main(__int64 seed, void *lpParameter)
 
 void MinecraftServer::HaltServer(bool bPrimaryPlayerSignedOut)
 {
+	Socket::StopTcpServerListener();
 	s_bServerHalted = true;
 	if( server != NULL )
 	{
@@ -1593,10 +2163,12 @@ File *MinecraftServer::getFile(const wstring& name)
 
 void MinecraftServer::info(const wstring& string)
 {
+	consolePrintLine(string);
 }
 
 void MinecraftServer::warn(const wstring& string)
 {
+	consolePrintLine(L"[WARN] " + string);
 }
 
 wstring MinecraftServer::getConsoleName()

@@ -7,6 +7,34 @@
 
 CPlatformNetworkManagerSony *g_pPlatformNetworkManager;
 
+namespace
+{
+void AppendUniquePlayer(std::vector<INetworkPlayer *> &players, INetworkPlayer *player)
+{
+	if(player == NULL)
+	{
+		return;
+	}
+
+	for(std::vector<INetworkPlayer *>::iterator it = players.begin(); it != players.end(); ++it)
+	{
+		if(*it == player)
+		{
+			return;
+		}
+
+		if((*it)->GetSmallId() == player->GetSmallId() &&
+		   (*it)->IsHost() == player->IsHost() &&
+		   (*it)->IsLocal() == player->IsLocal())
+		{
+			return;
+		}
+	}
+
+	players.push_back(player);
+}
+}
+
 bool CPlatformNetworkManagerSony::IsLocalGame() 
 { 
 	return m_bIsOfflineGame; 
@@ -597,7 +625,27 @@ void CPlatformNetworkManagerSony::DoWork()
 
 int CPlatformNetworkManagerSony::GetPlayerCount()
 {
-	return m_pSQRNet->GetPlayerCount();
+	std::vector<INetworkPlayer *> players;
+
+	const int sqrCount = m_pSQRNet->GetPlayerCount();
+	for(int i = 0; i < sqrCount; ++i)
+	{
+		SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetPlayerByIndex(i);
+		INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+		if(player == NULL && sqrPlayer != NULL)
+		{
+			player = addNetworkPlayer(sqrPlayer);
+		}
+		AppendUniquePlayer(players, player);
+	}
+
+	const int directCount = Socket::GetDirectPlayerCount();
+	for(int i = 0; i < directCount; ++i)
+	{
+		AppendUniquePlayer(players, Socket::GetDirectPlayerByIndex(i));
+	}
+
+	return (int)players.size();
 }
 
 bool CPlatformNetworkManagerSony::ShouldMessageForFullSession()
@@ -607,7 +655,7 @@ bool CPlatformNetworkManagerSony::ShouldMessageForFullSession()
 
 int CPlatformNetworkManagerSony::GetOnlinePlayerCount()
 {
-	return m_pSQRNet->GetOnlinePlayerCount();
+	return GetPlayerCount();
 }
 
 int CPlatformNetworkManagerSony::GetLocalPlayerMask(int playerIndex)
@@ -992,9 +1040,77 @@ CPlatformNetworkManagerSony::PlayerFlags::~PlayerFlags()
 // Add a player to the per system flag storage - if we've already got a player from that system, copy its flags over
 void CPlatformNetworkManagerSony::SystemFlagAddPlayer(INetworkPlayer *pNetworkPlayer)
 {
+	if( pNetworkPlayer == NULL )
+	{
+		return;
+	}
+
+	// Remove stale entries before copying per-system chunk flags. Without this,
+	// a reconnect can inherit fully-set flags from a disconnected player on the
+	// same machine, which prevents chunks from being re-sent.
+	std::vector<INetworkPlayer *> activePlayers;
+	const int activeCount = GetPlayerCount();
+	for( int i = 0; i < activeCount; ++i )
+	{
+		INetworkPlayer *activePlayer = GetPlayerByIndex(i);
+		if( activePlayer != NULL )
+		{
+			activePlayers.push_back(activePlayer);
+		}
+	}
+
+	for( unsigned int i = 0; i < m_playerFlags.size(); )
+	{
+		bool stillActive = false;
+		for( unsigned int j = 0; j < activePlayers.size(); ++j )
+		{
+			if( m_playerFlags[i]->m_pNetworkPlayer == activePlayers[j] )
+			{
+				stillActive = true;
+				break;
+			}
+		}
+
+		if( !stillActive )
+		{
+			delete m_playerFlags[i];
+			m_playerFlags[i] = m_playerFlags.back();
+			m_playerFlags.pop_back();
+			continue;
+		}
+
+		++i;
+	}
+
+	for( unsigned int i = 0; i < m_playerFlags.size(); ++i )
+	{
+		if( m_playerFlags[i]->m_pNetworkPlayer == pNetworkPlayer )
+		{
+			return;
+		}
+	}
+
 	PlayerFlags *newPlayerFlags = new PlayerFlags( pNetworkPlayer,  m_flagIndexSize);
+
+	// If a same-system player with the same UID is still present, treat this as
+	// a reconnect and do not inherit chunk-sent flags. Otherwise a rejoin can be
+	// considered "fully synced" and only the spawn chunk appears.
+	bool copyFlagsFromSystem = true;
+	PlayerUID newUid = pNetworkPlayer->GetUID();
+	for( unsigned int i = 0; i < m_playerFlags.size(); ++i )
+	{
+		INetworkPlayer *existingPlayer = m_playerFlags[i]->m_pNetworkPlayer;
+		if( existingPlayer != NULL &&
+			pNetworkPlayer->IsSameSystem(existingPlayer) &&
+			ProfileManager.AreXUIDSEqual(existingPlayer->GetUID(), newUid) )
+		{
+			copyFlagsFromSystem = false;
+			break;
+		}
+	}
+
 	// If any of our existing players are on the same system, then copy over flags from that one
-	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+	for( unsigned int i = 0; copyFlagsFromSystem && i < m_playerFlags.size(); i++ )
 	{
 		if( pNetworkPlayer->IsSameSystem(m_playerFlags[i]->m_pNetworkPlayer) )
 		{
@@ -1034,6 +1150,56 @@ void CPlatformNetworkManagerSony::SystemFlagSet(INetworkPlayer *pNetworkPlayer, 
 {
 	if( ( index < 0 ) || ( index >= m_flagIndexSize ) ) return;
 	if( pNetworkPlayer == NULL ) return;
+
+	// Drop stale records before using IsSameSystem() against tracked players.
+	std::vector<INetworkPlayer *> activePlayers;
+	const int activeCount = GetPlayerCount();
+	for( int i = 0; i < activeCount; ++i )
+	{
+		INetworkPlayer *activePlayer = GetPlayerByIndex(i);
+		if( activePlayer != NULL )
+		{
+			activePlayers.push_back(activePlayer);
+		}
+	}
+
+	for( unsigned int i = 0; i < m_playerFlags.size(); )
+	{
+		bool stillActive = false;
+		for( unsigned int j = 0; j < activePlayers.size(); ++j )
+		{
+			if( m_playerFlags[i]->m_pNetworkPlayer == activePlayers[j] )
+			{
+				stillActive = true;
+				break;
+			}
+		}
+
+		if( !stillActive )
+		{
+			delete m_playerFlags[i];
+			m_playerFlags[i] = m_playerFlags.back();
+			m_playerFlags.pop_back();
+			continue;
+		}
+
+		++i;
+	}
+
+	// Ensure an entry exists before trying to set per-system flags.
+	bool hasEntry = false;
+	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+	{
+		if( m_playerFlags[i]->m_pNetworkPlayer == pNetworkPlayer )
+		{
+			hasEntry = true;
+			break;
+		}
+	}
+	if( !hasEntry )
+	{
+		SystemFlagAddPlayer(pNetworkPlayer);
+	}
 
 	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
 	{
@@ -1302,27 +1468,106 @@ INetworkPlayer *CPlatformNetworkManagerSony::getNetworkPlayer(SQRNetworkPlayer *
 
 INetworkPlayer *CPlatformNetworkManagerSony::GetLocalPlayerByUserIndex(int userIndex )
 {
-	return getNetworkPlayer(m_pSQRNet->GetLocalPlayerByUserIndex(userIndex)); 
+	SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetLocalPlayerByUserIndex(userIndex);
+	INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+	if(player == NULL && sqrPlayer != NULL)
+	{
+		player = addNetworkPlayer(sqrPlayer);
+	}
+	return player;
 }
 
 INetworkPlayer *CPlatformNetworkManagerSony::GetPlayerByIndex(int playerIndex)
 {
-	return getNetworkPlayer(m_pSQRNet->GetPlayerByIndex(playerIndex));
+	std::vector<INetworkPlayer *> players;
+
+	const int sqrCount = m_pSQRNet->GetPlayerCount();
+	for(int i = 0; i < sqrCount; ++i)
+	{
+		SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetPlayerByIndex(i);
+		INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+		if(player == NULL && sqrPlayer != NULL)
+		{
+			player = addNetworkPlayer(sqrPlayer);
+		}
+		AppendUniquePlayer(players, player);
+	}
+
+	const int directCount = Socket::GetDirectPlayerCount();
+	for(int i = 0; i < directCount; ++i)
+	{
+		AppendUniquePlayer(players, Socket::GetDirectPlayerByIndex(i));
+	}
+
+	if(playerIndex < 0 || playerIndex >= (int)players.size())
+	{
+		return NULL;
+	}
+
+	return players[playerIndex];
 }
 
 INetworkPlayer * CPlatformNetworkManagerSony::GetPlayerByXuid(PlayerUID xuid)
 {
-	return getNetworkPlayer(m_pSQRNet->GetPlayerByXuid(xuid));
+	SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetPlayerByXuid(xuid);
+	INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+	if(player == NULL && sqrPlayer != NULL)
+	{
+		player = addNetworkPlayer(sqrPlayer);
+	}
+	if(player != NULL)
+	{
+		return player;
+	}
+
+	const int directCount = Socket::GetDirectPlayerCount();
+	for(int i = 0; i < directCount; ++i)
+	{
+		INetworkPlayer *directPlayer = Socket::GetDirectPlayerByIndex(i);
+		if(directPlayer != NULL && ProfileManager.AreXUIDSEqual(directPlayer->GetUID(), xuid))
+		{
+			return directPlayer;
+		}
+	}
+
+	return NULL;
 }
 
 INetworkPlayer * CPlatformNetworkManagerSony::GetPlayerBySmallId(unsigned char smallId)
 {
-	return getNetworkPlayer(m_pSQRNet->GetPlayerBySmallId(smallId));
+	SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetPlayerBySmallId(smallId);
+	INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+	if(player == NULL && sqrPlayer != NULL)
+	{
+		player = addNetworkPlayer(sqrPlayer);
+	}
+	if(player != NULL && player->GetSmallId() == smallId)
+	{
+		return player;
+	}
+
+	return Socket::GetDirectPlayerBySmallId(smallId);
 }
 
 INetworkPlayer *CPlatformNetworkManagerSony::GetHostPlayer()
 {
-	return getNetworkPlayer(m_pSQRNet->GetHostPlayer());
+	const int directCount = Socket::GetDirectPlayerCount();
+	for(int i = 0; i < directCount; ++i)
+	{
+		INetworkPlayer *directPlayer = Socket::GetDirectPlayerByIndex(i);
+		if(directPlayer != NULL && directPlayer->IsHost())
+		{
+			return directPlayer;
+		}
+	}
+
+	SQRNetworkPlayer *sqrPlayer = m_pSQRNet->GetHostPlayer();
+	INetworkPlayer *player = getNetworkPlayer(sqrPlayer);
+	if(player == NULL && sqrPlayer != NULL)
+	{
+		player = addNetworkPlayer(sqrPlayer);
+	}
+	return player;
 }
 
 bool CPlatformNetworkManagerSony::IsHost()
@@ -1332,6 +1577,10 @@ bool CPlatformNetworkManagerSony::IsHost()
 
 bool CPlatformNetworkManagerSony::JoinGameFromInviteInfo( int userIndex, int userMask, const INVITE_INFO *pInviteInfo)
 {
+	if( pInviteInfo == NULL )
+	{
+		return false;
+	}
 	return m_pSQRNet->JoinRoom( pInviteInfo->m_RoomId, pInviteInfo->m_ServerId, userMask, pInviteInfo );
 }
 

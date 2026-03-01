@@ -7,11 +7,15 @@ class Settings
 //    public static Logger logger = Logger.getLogger("Minecraft");
 //    private Properties properties = new Properties();
 private:
-	unordered_map<wstring,wstring> properties;	// 4J - TODO was Properties type, will need to implement something we can serialise/deserialise too
-	//File *file;
+	unordered_map<wstring,wstring> properties;
+	File *file;
+
+	void loadProperties();
+	static bool parseBoolValue(const wstring& value, bool defaultValue);
 
 public:
 	Settings(File *file);
+	~Settings();
     void generateNewProperties();
     void saveProperties();
     wstring getString(const wstring& key, const wstring& defaultValue);

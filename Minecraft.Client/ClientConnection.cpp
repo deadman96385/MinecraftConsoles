@@ -59,37 +59,27 @@
 
 ClientConnection::ClientConnection(Minecraft *minecraft, const wstring& ip, int port)
 {
-	// 4J Stu - No longer used as we use the socket version below.
-	assert(FALSE);
-#if 0
-	// 4J - added initiliasers
 	random = new Random();
 	done = false;
-    level = false;
-    started = false;
+	level = NULL;
+	started = false;
+	savedDataStorage = new SavedDataStorage(NULL);
+	maxPlayers = 20;
 
-    this->minecraft = minecraft;
+	this->minecraft = minecraft;
+	m_userIndex = ProfileManager.GetPrimaryPad();
 
-	Socket *socket;
-	if( gNetworkManager.IsHost() )
-	{
-	    socket = new Socket();	// 4J - Local connection
-	}
-	else
-	{
-		socket = new Socket(ip);	// 4J - Connection over xrnm - hardcoded IP at present
-	}
+	Socket *socket = new Socket(ip, port);
 	createdOk = socket->createdOk;
 	if( createdOk )
 	{
-	    connection = new Connection(socket, L"Client", this);
+		connection = new Connection(socket, L"Client", this);
 	}
 	else
 	{
 		connection = NULL;
 		delete socket;
 	}
-#endif
 }
 
 ClientConnection::ClientConnection(Minecraft *minecraft, Socket *socket, int iUserIndex /*= -1*/)
@@ -661,6 +651,11 @@ void ClientConnection::handleAddEntity(shared_ptr<AddEntityPacket> packet)
 
             e->lerpMotion(packet->xa / 8000.0, packet->ya / 8000.0, packet->za / 8000.0);	
         }
+
+		if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+		{
+			onClientStartReady("AddEntity");
+		}
 	}
 
 }
@@ -914,6 +909,55 @@ void ClientConnection::handleRemoveEntity(shared_ptr<RemoveEntitiesPacket> packe
 	}
 }
 
+void ClientConnection::onClientStartReady(const char *reason)
+{
+	if (started)
+	{
+		return;
+	}
+
+	shared_ptr<Player> player = minecraft->localplayers[m_userIndex];
+	if (player == NULL)
+	{
+		return;
+	}
+
+	app.DebugPrintf("Client start transition triggered by %s (userIndex=%d)\n", reason != NULL ? reason : "unknown", m_userIndex);
+
+	if(!g_NetworkManager.IsHost() )
+	{
+		Minecraft::GetInstance()->progressRenderer->progressStagePercentage((eCCConnected * 100)/ (eCCConnected));
+	}
+
+	player->xo = player->x;
+	player->yo = player->y;
+	player->zo = player->z;
+	// 4J - set old position too so first frame does not interpolate from origin.
+	player->xOld = player->x;
+	player->yOld = player->y;
+	player->zOld = player->z;
+
+	started = true;
+	minecraft->setScreen(NULL);
+
+	const bool isDirectTcpConnection = (connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport());
+	if(isDirectTcpConnection && !app.GetGameStarted())
+	{
+		app.DebugPrintf("Client start enabling game-started state for direct TCP path\n");
+		app.SetGameStarted(true);
+	}
+
+	// 4J-PB - can't call this when this function is called from the qnet thread (GetGameStarted will be false)
+	if(isDirectTcpConnection)
+	{
+		ui.CloseUIScenes(m_userIndex, true);
+	}
+	else if(app.GetGameStarted())
+	{
+		ui.CloseUIScenes(m_userIndex);
+	}
+}
+
 void ClientConnection::handleMovePlayer(shared_ptr<MovePlayerPacket> packet)
 {
     shared_ptr<Player> player = minecraft->localplayers[m_userIndex]; //minecraft->player;
@@ -944,32 +988,7 @@ void ClientConnection::handleMovePlayer(shared_ptr<MovePlayerPacket> packet)
     packet->z = player->z;
     packet->yView = player->y;
     connection->send(packet);
-    if (!started)
-	{		
-
-		if(!g_NetworkManager.IsHost() )
-		{
-			Minecraft::GetInstance()->progressRenderer->progressStagePercentage((eCCConnected * 100)/ (eCCConnected));
-		}
-        player->xo = player->x;
-        player->yo = player->y;
-        player->zo = player->z;
-		// 4J - added setting xOld/yOld/zOld here too, as otherwise at the start of the game we interpolate the player position from the origin to wherever its first position really is
-		player->xOld = player->x;
-		player->yOld = player->y;
-		player->zOld = player->z;
-
-        started = true;
-        minecraft->setScreen(NULL);
-		
-		// Fix for #105852 - TU12: Content: Gameplay: Local splitscreen Players are spawned at incorrect places after re-joining previously saved and loaded "Mass Effect World".
-		// Move this check from Minecraft::createExtraLocalPlayer
-		// 4J-PB - can't call this when this function is called from the qnet thread (GetGameStarted will be false)
-		if(app.GetGameStarted())
-		{
-			ui.CloseUIScenes(m_userIndex);
-		}
-    }
+	onClientStartReady("MovePlayer");
 
 }
 
@@ -979,11 +998,20 @@ void ClientConnection::handleChunkVisibilityArea(shared_ptr<ChunkVisibilityAreaP
 	for(int z = packet->m_minZ; z <= packet->m_maxZ; ++z)
 		for(int x = packet->m_minX; x <= packet->m_maxX; ++x)
 			level->setChunkVisible(x, z, true);
+
+	if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+	{
+		onClientStartReady("ChunkVisibilityArea");
+	}
 }
 
 void ClientConnection::handleChunkVisibility(shared_ptr<ChunkVisibilityPacket> packet)
 {
 	level->setChunkVisible(packet->x, packet->z, packet->visible);
+	if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+	{
+		onClientStartReady("ChunkVisibility");
+	}
 }
 
 void ClientConnection::handleChunkTilesUpdate(shared_ptr<ChunkTilesUpdatePacket> packet)
@@ -1052,6 +1080,10 @@ void ClientConnection::handleChunkTilesUpdate(shared_ptr<ChunkTilesUpdatePacket>
 		PIXEndNamedEvent();
 
 		PIXEndNamedEvent();
+		if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+		{
+			onClientStartReady("ChunkTilesUpdate");
+		}
 	}
 }
 
@@ -1087,6 +1119,10 @@ void ClientConnection::handleBlockRegionUpdate(shared_ptr<BlockRegionUpdatePacke
 			dimensionLevel->dataReceivedForChunk( packet->x >> 4, packet->z >> 4 );
 		}
 		PIXEndNamedEvent();
+		if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+		{
+			onClientStartReady("BlockRegionUpdate");
+		}
 	}
 }
 
@@ -1623,6 +1659,7 @@ void ClientConnection::handleEntityActionAtPosition(shared_ptr<EntityActionAtPos
 void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
 {
 //	printf("Client: handlePreLogin\n");
+	app.DebugPrintf("Client received PreLogin: netVersion=%d players=%d hostIndex=%d settings=0x%08x texturePack=%u\n", packet->m_netcodeVersion, packet->m_dwPlayerCount, packet->m_hostIndex, packet->m_serverSettings, packet->m_texturePackId);
 #if 1
 	// 4J - Check that we can play with all the players already in the game who have Friends-Only UGC set
 	BOOL canPlay = TRUE;
@@ -1630,6 +1667,12 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
 	BOOL isAtLeastOneFriend = g_NetworkManager.IsHost();
 	BOOL isFriendsWithHost = TRUE;
 	BOOL cantPlayContentRestricted = FALSE;
+	const bool isDirectTcpConnection = (connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport());
+	const bool hasHostPlayerUid = (packet->m_playerXuids != NULL && packet->m_dwPlayerCount > 0 && packet->m_hostIndex < packet->m_dwPlayerCount);
+	if(isDirectTcpConnection)
+	{
+		app.DebugPrintf("Client PreLogin using direct TCP path; skipping platform session privilege checks\n");
+	}
 	
 	if(!g_NetworkManager.IsHost())
 	{
@@ -1795,6 +1838,8 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
 	cantPlayContentRestricted= FALSE;
 
 #if ( defined __PS3__ || defined __ORBIS__ || defined __PSVITA__)
+	if(!isDirectTcpConnection)
+	{
 
 	if(!g_NetworkManager.IsHost() && !app.GetGameHostOption(eGameHostOption_FriendsOfFriends))
 	{
@@ -1861,7 +1906,13 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
 #endif
 					if( ret == 0 )
 					{
-						if(strcmp(npid.handle.data, packet->m_playerXuids[packet->m_hostIndex].getOnlineID()) == 0)
+						if(!hasHostPlayerUid)
+						{
+							app.DebugPrintf("Client PreLogin missing host UID in packet; skipping friend check\n");
+							isFriend = true;
+							break;
+						}
+						else if(strcmp(npid.handle.data, packet->m_playerXuids[packet->m_hostIndex].getOnlineID()) == 0)
 						{
 							isFriend = true;
 							break;
@@ -1902,6 +1953,7 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
 #endif
 
 		cantPlayContentRestricted = bContentRestricted ? 1 : 0;
+	}
 	}
 
 
@@ -2064,6 +2116,7 @@ void ClientConnection::handlePreLogin(shared_ptr<PreLoginPacket> packet)
 		}
 		BOOL allAllowed, friendsAllowed;
 		ProfileManager.AllowedPlayerCreatedContent(m_userIndex,true,&allAllowed,&friendsAllowed);
+		app.DebugPrintf("Client sending Login packet: user='%ls' userIndex=%d\n", minecraft->user->name.c_str(), m_userIndex);
 		send( shared_ptr<LoginPacket>( new LoginPacket(minecraft->user->name, SharedConstants::NETWORK_PROTOCOL_VERSION, offlineXUID, onlineXUID, (allAllowed!=TRUE && friendsAllowed==TRUE), 
 			packet->m_ugcPlayersVersion, app.GetPlayerSkinId(m_userIndex), app.GetPlayerCapeId(m_userIndex), ProfileManager.IsGuest( m_userIndex ))));
 
@@ -2155,6 +2208,11 @@ void ClientConnection::handleAddMob(shared_ptr<AddMobPacket> packet)
 	{
 		shared_ptr<Slime> slime = dynamic_pointer_cast<Slime>(mob);
 		slime->setSize( slime->getSize() );
+	}
+
+	if(connection != NULL && connection->getSocket() != NULL && connection->getSocket()->isTcpTransport())
+	{
+		onClientStartReady("AddMob");
 	}
 }
 

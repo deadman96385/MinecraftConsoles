@@ -87,7 +87,7 @@ void CConsoleMinecraftApp::TemporaryCreateGameStart()
 	app.SetGameHostOption(eGameHostOption_Gamertags,1);
 	app.SetGameHostOption(eGameHostOption_BedrockFog,1);
 
-	app.SetGameHostOption(eGameHostOption_GameType,GameType::CREATIVE->getId() ); // LevelSettings::GAMETYPE_SURVIVAL
+	app.SetGameHostOption(eGameHostOption_GameType,GameType::SURVIVAL->getId() );
 	app.SetGameHostOption(eGameHostOption_LevelType, 0 );
 	app.SetGameHostOption(eGameHostOption_Structures, 1 );
 	app.SetGameHostOption(eGameHostOption_BonusChest, 0 );
@@ -102,6 +102,8 @@ void CConsoleMinecraftApp::TemporaryCreateGameStart()
 
 	param->settings = app.GetGameHostOption( eGameHostOption_All );
 
+	// Stub networking requires an explicit host session before spinning the game thread.
+	g_NetworkManager.HostGame(1, true, false, MINECRAFT_NET_MAX_PLAYERS, 0);
 	g_NetworkManager.FakeLocalPlayerJoined();
 
 	LoadingInputParams *loadingParams = new LoadingInputParams();

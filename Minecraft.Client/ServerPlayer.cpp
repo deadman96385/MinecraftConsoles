@@ -109,6 +109,9 @@ ServerPlayer::ServerPlayer(MinecraftServer *server, Level *level, const wstring&
 
 	// 4J Added
 	lastBrupSendTickCount = 0;
+	// Force initial BRUP transmission on join/rejoin. This recovers from stale
+	// per-system chunk flags that can otherwise leave only the spawn chunk visible.
+	m_forceChunkResendCount = 2048;
 }
 
 ServerPlayer::~ServerPlayer()
@@ -320,7 +323,7 @@ void ServerPlayer::doChunkSendingTick(bool dontDelayChunks)
 		for( AUTO_VAR(it, chunksToSend.begin()); it != chunksToSend.end(); it++ )
 		{
             ChunkPos chunk = *it;
-			if( level->isChunkFinalised(chunk.x, chunk.z) )
+			if( (m_forceChunkResendCount > 0) || level->isChunkFinalised(chunk.x, chunk.z) )
 			{
 				double newDist = chunk.distanceToSqr(x, z);
 				if ( (!nearestValid) || (newDist < dist) )
@@ -352,7 +355,7 @@ void ServerPlayer::doChunkSendingTick(bool dontDelayChunks)
 //					g_NetworkManager.GetHostPlayer()->GetSendQueueSizeBytes( NULL, true ),
 //					connection->done);
 	
-				if( dontDelayChunks || 
+				if( dontDelayChunks || ((m_forceChunkResendCount > 0) && !connection->done) || 
 					(canSendOnSlowQueue &&
 					(connection->countDelayedPackets() < 4 )&&
 #ifdef _XBOX_ONE
@@ -398,13 +401,14 @@ void ServerPlayer::doChunkSendingTick(bool dontDelayChunks)
 					// (2) Sending a chunk that we've already sent as the player moves around. The original version of the game resends these, since it maintains
 					//     a region of active chunks round each player in the "infinite" world, but in our finite world, we don't ever request that chunks be
 					//     unloaded on the client and so just gradually build up more and more of the finite set of chunks as the player moves
-					if( !g_NetworkManager.SystemFlagGet(connection->getNetworkPlayer(),flagIndex) )
+					bool forceChunkResend = (m_forceChunkResendCount > 0);
+					if( forceChunkResend || !g_NetworkManager.SystemFlagGet(connection->getNetworkPlayer(),flagIndex) )
 					{
 //						app.DebugPrintf("Creating BRUP for %d %d\n",nearest.x, nearest.z);
 						PIXBeginNamedEvent(0,"Creation BRUP for sending\n");
 						shared_ptr<BlockRegionUpdatePacket> packet = shared_ptr<BlockRegionUpdatePacket>( new BlockRegionUpdatePacket(nearest.x * 16, 0, nearest.z * 16, 16, Level::maxBuildHeight, 16, level) );
 						PIXEndNamedEvent();
-						if( dontDelayChunks ) packet->shouldDelay = false;
+						if( dontDelayChunks || forceChunkResend ) packet->shouldDelay = false;
 
 						if( packet->shouldDelay == true )
 						{
@@ -420,6 +424,10 @@ void ServerPlayer::doChunkSendingTick(bool dontDelayChunks)
 						g_NetworkManager.SystemFlagSet(connection->getNetworkPlayer(),flagIndex);
 
 						chunkDataSent = true;
+						if( forceChunkResend )
+						{
+							--m_forceChunkResendCount;
+						}
 					}
 				}
 				else

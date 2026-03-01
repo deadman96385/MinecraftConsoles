@@ -37,6 +37,7 @@ private:
     int invulnerableTime;
 	int viewDistance;
 	int lastBrupSendTickCount; // 4J Added
+	int m_forceChunkResendCount; // 4J Added - helps recover from stale per-system chunk flags after reconnect
 
 public:
 	ServerPlayer(MinecraftServer *server, Level *level, const wstring& name, ServerPlayerGameMode *gameMode);

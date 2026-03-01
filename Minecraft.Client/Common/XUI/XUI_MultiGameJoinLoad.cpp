@@ -2,11 +2,13 @@
 #include <xuiresource.h>
 #include <xuiapp.h>
 #include <assert.h>
+#include <stdlib.h>
 #include "..\..\..\Minecraft.World\StringHelpers.h"
 #include "..\..\Common\Tutorial\TutorialMode.h"
 #include "..\..\..\Minecraft.World\ConsoleSaveFileIO.h"
 #include "..\..\LocalPlayer.h"
 #include "..\..\Minecraft.h"
+#include "..\..\ConnectScreen.h"
 #include "..\..\ProgressRenderer.h"
 #include "..\..\..\Minecraft.World\AABB.h"
 #include "..\..\..\Minecraft.World\Vec3.h"
@@ -21,6 +23,8 @@
 #include "XUI_MultiGameCreate.h"
 #include "..\..\MinecraftServer.h"
 #include "..\..\Options.h"
+#include "..\Network\NetworkPlayerInterface.h"
+#include "..\..\..\Minecraft.World\Socket.h"
 
 #include "..\GameRules\LevelGenerationOptions.h"
 #include "..\..\TexturePackRepository.h"
@@ -29,6 +33,171 @@
 
 #define CHECKFORAVAILABLETEXTUREPACKS_TIMER_ID 3
 #define CHECKFORAVAILABLETEXTUREPACKS_TIMER_TIME 100
+
+namespace
+{
+bool TryParseTcpPort(const wstring& text, int *portOut)
+{
+	if(portOut == NULL)
+	{
+		return false;
+	}
+
+	const wstring trimmed = trimString(text);
+	if(trimmed.empty())
+	{
+		return false;
+	}
+
+	wchar_t *end = NULL;
+	long parsed = wcstol(trimmed.c_str(), &end, 10);
+	if(end == trimmed.c_str() || *end != L'\0' || parsed <= 0 || parsed > 65535)
+	{
+		return false;
+	}
+
+	*portOut = (int)parsed;
+	return true;
+}
+
+bool ParseDirectConnectEndpoint(const wstring& endpoint, wstring *hostOut, int *portOut)
+{
+	if(hostOut == NULL || portOut == NULL)
+	{
+		return false;
+	}
+
+	const wstring trimmed = trimString(endpoint);
+	if(trimmed.empty())
+	{
+		return false;
+	}
+
+	wstring host = trimmed;
+	int port = 25565;
+
+	if(trimmed[0] == L'[')
+	{
+		const size_t closeBracket = trimmed.find(L']');
+		if(closeBracket == wstring::npos)
+		{
+			return false;
+		}
+
+		host = trimString(trimmed.substr(1, closeBracket - 1));
+		const wstring remainder = trimString(trimmed.substr(closeBracket + 1));
+		if(!remainder.empty())
+		{
+			if(remainder[0] != L':')
+			{
+				return false;
+			}
+
+			if(!TryParseTcpPort(remainder.substr(1), &port))
+			{
+				return false;
+			}
+		}
+	}
+	else
+	{
+		vector<wstring> parts = stringSplit(trimmed, L':');
+		if(parts.size() == 2)
+		{
+			host = trimString(parts[0]);
+			if(!TryParseTcpPort(parts[1], &port))
+			{
+				return false;
+			}
+		}
+		else if(parts.size() > 2)
+		{
+			// Treat unbracketed IPv6 as host-only and use default port.
+			host = trimmed;
+		}
+	}
+
+	if(host.empty())
+	{
+		return false;
+	}
+
+	*hostOut = host;
+	*portOut = port;
+	return true;
+}
+
+bool StartDirectConnectViaNetworkFlow(Minecraft *minecraft, const wstring& host, int port, const char *flowTag)
+{
+	if(minecraft == NULL)
+	{
+		return false;
+	}
+
+	const int primaryPad = ProfileManager.GetPrimaryPad();
+	const int localUsersMask = g_NetworkManager.GetLocalPlayerMask(primaryPad);
+
+	minecraft->clearConnectionFailed();
+	app.SetTutorialMode(false);
+	g_NetworkManager.SetLocalGame(false);
+
+#ifndef _XBOX
+	// Ensure local wrapper exists before entering join state for the direct TCP socket.
+	if(g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad) == NULL)
+	{
+		g_NetworkManager.FakeLocalPlayerJoined();
+	}
+#endif
+
+	if(!g_NetworkManager.JoinGameFromInviteInfo(primaryPad, localUsersMask, NULL))
+	{
+		app.DebugPrintf("Direct connect (%s) failed to enter client session state\n", flowTag);
+		return false;
+	}
+
+	INetworkPlayer *localPlayer = g_NetworkManager.GetLocalPlayerByUserIndex(primaryPad);
+	if(localPlayer == NULL)
+	{
+		app.DebugPrintf("Direct connect (%s) failed: local network player not available\n", flowTag);
+		return false;
+	}
+
+	Socket *existingSocket = localPlayer->GetSocket();
+	if(existingSocket != NULL)
+	{
+		if(!existingSocket->close(false))
+		{
+			existingSocket->close(true);
+		}
+		localPlayer->SetSocket(NULL);
+	}
+
+	Socket *directSocket = new Socket(host, port);
+	if(!directSocket->createdOk)
+	{
+		app.DebugPrintf("Direct connect (%s) failed: unable to open TCP socket to %ls:%d\n", flowTag, host.c_str(), port);
+		delete directSocket;
+		return false;
+	}
+
+	localPlayer->SetSocket(directSocket);
+	directSocket->setPlayer(localPlayer);
+
+	LoadingInputParams *loadingParams = new LoadingInputParams();
+	loadingParams->func = &CGameNetworkManager::RunNetworkGameThreadProc;
+	loadingParams->lpParam = NULL;
+
+	UIFullscreenProgressCompletionData *completionData = new UIFullscreenProgressCompletionData();
+	completionData->bShowBackground = TRUE;
+	completionData->bShowLogo = TRUE;
+	completionData->type = e_ProgressCompletion_CloseAllPlayersUIScenes;
+	completionData->iPad = DEFAULT_XUI_MENU_USER;
+	loadingParams->completionData = completionData;
+
+	ui.NavigateToScene(primaryPad, eUIScene_FullscreenProgress, loadingParams);
+	return true;
+}
+}
 
 //----------------------------------------------------------------------------------
 // Performs initialization tasks - retrieves controls.
@@ -61,6 +230,7 @@ HRESULT CScene_MultiGameJoinLoad::OnInit( XUIMessageInit* pInitData, BOOL& bHand
 	m_bKillSaveInfoEnumerate=false;
 
 	m_bShowingPartyGamesOnly = false;
+	m_directConnectAddress = L"";
 
 	m_bRetrievingSaveInfo=false;
 	m_bSaveTransferInProgress=false;
@@ -643,15 +813,35 @@ HRESULT CScene_MultiGameJoinLoad::OnKeyDown(XUIMessageInput* pInputData, BOOL& r
 		CXuiSceneBase::PlayUISFX(eSFX_Press);
 		break;
 	case VK_PAD_Y:
-		if(m_pGamesList->TreeHasFocus() && m_pGamesList->GetItemCount() > 0)
+#ifdef __PS3__
+		if(m_pGamesList->GetItemCount() == 0)
 		{
-			DWORD nIndex = m_pGamesList->GetCurSel();
-			FriendSessionInfo *pSelectedSession = currentSessions.at( nIndex );
-
-			PlayerUID xuid = pSelectedSession->data.hostPlayerUID;
-			if( xuid != INVALID_XUID )
-				hr = XShowGamerCardUI(ProfileManager.GetLockedProfile(), xuid);
+			m_bIgnoreInput = true;
+			InputManager.RequestKeyboard(
+				L"Direct Connect",
+				m_directConnectAddress.c_str(),
+				(DWORD)pInputData->UserIndex,
+				128,
+				&CScene_MultiGameJoinLoad::KeyboardDirectConnectReturned,
+				this,
+				C_4JInput::EKeyboardMode_Default);
 			CXuiSceneBase::PlayUISFX(eSFX_Press);
+			break;
+		}
+#endif
+
+		if(m_pGamesList->TreeHasFocus())
+		{
+			if(m_pGamesList->GetItemCount() > 0)
+			{
+				DWORD nIndex = m_pGamesList->GetCurSel();
+				FriendSessionInfo *pSelectedSession = currentSessions.at( nIndex );
+
+				PlayerUID xuid = pSelectedSession->data.hostPlayerUID;
+				if( xuid != INVALID_XUID )
+					hr = XShowGamerCardUI(ProfileManager.GetLockedProfile(), xuid);
+				CXuiSceneBase::PlayUISFX(eSFX_Press);
+			}
 		}
 		else if(DoesSavesListHaveFocus())
 		{
@@ -2384,6 +2574,75 @@ int CScene_MultiGameJoinLoad::KeyboardReturned(void *pParam,bool bSet)
 	}
 
 	return hr;
+}
+
+int CScene_MultiGameJoinLoad::KeyboardDirectConnectReturned(void *pParam,bool bSet)
+{
+	CScene_MultiGameJoinLoad* pClass = (CScene_MultiGameJoinLoad*)pParam;
+	if(pClass == NULL)
+	{
+		return 0;
+	}
+
+	pClass->m_bIgnoreInput = false;
+
+	uint16_t text[128];
+	ZeroMemory(text, sizeof(text));
+	InputManager.GetText(text);
+
+	wstring endpoint = trimString((wchar_t *)text);
+	app.DebugPrintf("Direct connect keyboard closed (XUI): bSet=%d endpoint='%ls'\n", bSet ? 1 : 0, endpoint.c_str());
+	if(endpoint.empty())
+	{
+		return 0;
+	}
+
+	bool shouldConnect = bSet;
+#ifdef __PS3__
+	// PS3 keyboard may report cancel despite returning edited text.
+	if(!shouldConnect && endpoint != pClass->m_directConnectAddress)
+	{
+		shouldConnect = true;
+	}
+#endif
+	if(!shouldConnect)
+	{
+		return 0;
+	}
+
+	pClass->m_directConnectAddress = endpoint;
+
+	wstring host;
+	int port = 25565;
+	if(!ParseDirectConnectEndpoint(endpoint, &host, &port))
+	{
+		UINT uiIDA[1];
+		uiIDA[0] = IDS_CONFIRM_OK;
+		StorageManager.RequestMessageBox(IDS_CONNECTION_FAILED, IDS_ERROR_NETWORK, uiIDA, 1, ProfileManager.GetPrimaryPad(), NULL, NULL, app.GetStringTable());
+		return 0;
+	}
+
+	Minecraft *minecraft = Minecraft::GetInstance();
+	pClass->m_bIgnoreInput = true;
+	app.DebugPrintf("Attempting direct connect (XUI) to %ls:%d\n", host.c_str(), port);
+	if(!StartDirectConnectViaNetworkFlow(minecraft, host, port, "XUI"))
+	{
+		app.DebugPrintf("Direct connect (XUI) falling back to legacy ConnectScreen flow\n");
+		if(minecraft != NULL)
+		{
+			app.CloseXuiScenes(ProfileManager.GetPrimaryPad());
+			minecraft->setScreen(new ConnectScreen(minecraft, host, port));
+		}
+		else
+		{
+			pClass->m_bIgnoreInput = false;
+			UINT uiIDA[1];
+			uiIDA[0] = IDS_CONFIRM_OK;
+			StorageManager.RequestMessageBox(IDS_CONNECTION_FAILED, IDS_ERROR_NETWORK, uiIDA, 1, ProfileManager.GetPrimaryPad(), NULL, NULL, app.GetStringTable());
+		}
+	}
+
+	return 0;
 }
 
 int CScene_MultiGameJoinLoad::LoadSaveDataForRenameReturned(void *pParam,bool bContinue)

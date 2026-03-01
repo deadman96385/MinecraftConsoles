@@ -6,6 +6,38 @@
 
 CPlatformNetworkManagerStub *g_pPlatformNetworkManager;
 
+namespace
+{
+void AppendUniquePlayer(std::vector<INetworkPlayer *> &players, INetworkPlayer *player)
+{
+	if(player == NULL)
+	{
+		return;
+	}
+
+	for(std::vector<INetworkPlayer *>::iterator it = players.begin(); it != players.end(); ++it)
+	{
+		if(*it == player)
+		{
+			return;
+		}
+
+		if((*it)->GetSmallId() == player->GetSmallId() &&
+		   (*it)->IsHost() == player->IsHost() &&
+		   (*it)->IsLocal() == player->IsLocal())
+		{
+			return;
+		}
+	}
+
+	players.push_back(player);
+}
+}
+
+CPlatformNetworkManagerStub::CPlatformNetworkManagerStub()
+	: m_pIQNet(NULL)
+{
+}
 
 void CPlatformNetworkManagerStub::NotifyPlayerJoined(IQNetPlayer *pQNetPlayer	)
 {
@@ -119,6 +151,15 @@ bool CPlatformNetworkManagerStub::Initialise(CGameNetworkManager *pGameNetworkMa
 	m_pGameNetworkManager = pGameNetworkManager;
 	m_flagIndexSize = flagIndexSize;
 	g_pPlatformNetworkManager = this;
+
+	if (m_pIQNet != NULL)
+	{
+		delete m_pIQNet;
+		m_pIQNet = NULL;
+	}
+	m_pIQNet = new IQNet();
+	m_pIQNet->EndGame();
+
 	for( int i = 0; i < XUSER_MAX_COUNT; i++ )
 	{
 		playerChangedCallback[ i ] = NULL;
@@ -154,6 +195,8 @@ bool CPlatformNetworkManagerStub::Initialise(CGameNetworkManager *pGameNetworkMa
 
 void CPlatformNetworkManagerStub::Terminate()
 {
+	delete m_pIQNet;
+	m_pIQNet = NULL;
 }
 
 int CPlatformNetworkManagerStub::GetJoiningReadyPercentage()
@@ -178,7 +221,27 @@ void CPlatformNetworkManagerStub::DoWork()
 
 int CPlatformNetworkManagerStub::GetPlayerCount()
 {
-	return m_pIQNet->GetPlayerCount();
+	std::vector<INetworkPlayer *> players;
+
+	const int qnetCount = m_pIQNet->GetPlayerCount();
+	for(int i = 0; i < qnetCount; ++i)
+	{
+		IQNetPlayer *qnetPlayer = m_pIQNet->GetPlayerByIndex(i);
+		INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+		if(player == NULL && qnetPlayer != NULL)
+		{
+			player = addNetworkPlayer(qnetPlayer);
+		}
+		AppendUniquePlayer(players, player);
+	}
+
+	const int directCount = Socket::GetDirectPlayerCount();
+	for(int i = 0; i < directCount; ++i)
+	{
+		AppendUniquePlayer(players, Socket::GetDirectPlayerByIndex(i));
+	}
+
+	return (int)players.size();
 }
 
 bool CPlatformNetworkManagerStub::ShouldMessageForFullSession()
@@ -188,7 +251,7 @@ bool CPlatformNetworkManagerStub::ShouldMessageForFullSession()
 
 int CPlatformNetworkManagerStub::GetOnlinePlayerCount()
 {
-	return 1;
+	return GetPlayerCount();
 }
 
 int CPlatformNetworkManagerStub::GetLocalPlayerMask(int playerIndex)
@@ -198,8 +261,14 @@ int CPlatformNetworkManagerStub::GetLocalPlayerMask(int playerIndex)
 
 bool CPlatformNetworkManagerStub::AddLocalPlayerByUserIndex( int userIndex )
 {
+	const HRESULT result = m_pIQNet->AddLocalPlayerByUserIndex(userIndex);
+	if(result != S_OK)
+	{
+		return false;
+	}
+
 	NotifyPlayerJoined(m_pIQNet->GetLocalPlayerByUserIndex(userIndex));
-	return ( m_pIQNet->AddLocalPlayerByUserIndex(userIndex) == S_OK );
+	return true;
 }
 
 bool CPlatformNetworkManagerStub::RemoveLocalPlayerByUserIndex( int userIndex )
@@ -404,9 +473,77 @@ CPlatformNetworkManagerStub::PlayerFlags::~PlayerFlags()
 // Add a player to the per system flag storage - if we've already got a player from that system, copy its flags over
 void CPlatformNetworkManagerStub::SystemFlagAddPlayer(INetworkPlayer *pNetworkPlayer)
 {
+	if( pNetworkPlayer == NULL )
+	{
+		return;
+	}
+
+	// Remove stale entries before copying per-system chunk flags. Without this,
+	// a reconnect can inherit fully-set flags from a disconnected player on the
+	// same machine, which prevents chunks from being re-sent.
+	std::vector<INetworkPlayer *> activePlayers;
+	const int activeCount = GetPlayerCount();
+	for( int i = 0; i < activeCount; ++i )
+	{
+		INetworkPlayer *activePlayer = GetPlayerByIndex(i);
+		if( activePlayer != NULL )
+		{
+			activePlayers.push_back(activePlayer);
+		}
+	}
+
+	for( unsigned int i = 0; i < m_playerFlags.size(); )
+	{
+		bool stillActive = false;
+		for( unsigned int j = 0; j < activePlayers.size(); ++j )
+		{
+			if( m_playerFlags[i]->m_pNetworkPlayer == activePlayers[j] )
+			{
+				stillActive = true;
+				break;
+			}
+		}
+
+		if( !stillActive )
+		{
+			delete m_playerFlags[i];
+			m_playerFlags[i] = m_playerFlags.back();
+			m_playerFlags.pop_back();
+			continue;
+		}
+
+		++i;
+	}
+
+	for( unsigned int i = 0; i < m_playerFlags.size(); ++i )
+	{
+		if( m_playerFlags[i]->m_pNetworkPlayer == pNetworkPlayer )
+		{
+			return;
+		}
+	}
+
 	PlayerFlags *newPlayerFlags = new PlayerFlags( pNetworkPlayer,  m_flagIndexSize);
+
+	// If a same-system player with the same UID is still present, treat this as
+	// a reconnect and do not inherit chunk-sent flags. Otherwise a rejoin can be
+	// considered "fully synced" and only the spawn chunk appears.
+	bool copyFlagsFromSystem = true;
+	PlayerUID newUid = pNetworkPlayer->GetUID();
+	for( unsigned int i = 0; i < m_playerFlags.size(); ++i )
+	{
+		INetworkPlayer *existingPlayer = m_playerFlags[i]->m_pNetworkPlayer;
+		if( existingPlayer != NULL &&
+			pNetworkPlayer->IsSameSystem(existingPlayer) &&
+			ProfileManager.AreXUIDSEqual(existingPlayer->GetUID(), newUid) )
+		{
+			copyFlagsFromSystem = false;
+			break;
+		}
+	}
+
 	// If any of our existing players are on the same system, then copy over flags from that one
-	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+	for( unsigned int i = 0; copyFlagsFromSystem && i < m_playerFlags.size(); i++ )
 	{
 		if( pNetworkPlayer->IsSameSystem(m_playerFlags[i]->m_pNetworkPlayer) )
 		{
@@ -446,6 +583,57 @@ void CPlatformNetworkManagerStub::SystemFlagSet(INetworkPlayer *pNetworkPlayer, 
 {
 	if( ( index < 0 ) || ( index >= m_flagIndexSize ) ) return;
 	if( pNetworkPlayer == NULL ) return;
+
+	// Drop stale records before using IsSameSystem() against tracked players.
+	std::vector<INetworkPlayer *> activePlayers;
+	const int activeCount = GetPlayerCount();
+	for( int i = 0; i < activeCount; ++i )
+	{
+		INetworkPlayer *activePlayer = GetPlayerByIndex(i);
+		if( activePlayer != NULL )
+		{
+			activePlayers.push_back(activePlayer);
+		}
+	}
+
+	for( unsigned int i = 0; i < m_playerFlags.size(); )
+	{
+		bool stillActive = false;
+		for( unsigned int j = 0; j < activePlayers.size(); ++j )
+		{
+			if( m_playerFlags[i]->m_pNetworkPlayer == activePlayers[j] )
+			{
+				stillActive = true;
+				break;
+			}
+		}
+
+		if( !stillActive )
+		{
+			delete m_playerFlags[i];
+			m_playerFlags[i] = m_playerFlags.back();
+			m_playerFlags.pop_back();
+			continue;
+		}
+
+		++i;
+	}
+
+	// Direct TCP players are not announced through IQNet join callbacks, so they may not
+	// have a flag record yet. Ensure one exists before attempting to set any flags.
+	bool hasEntry = false;
+	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
+	{
+		if( m_playerFlags[i]->m_pNetworkPlayer == pNetworkPlayer )
+		{
+			hasEntry = true;
+			break;
+		}
+	}
+	if( !hasEntry )
+	{
+		SystemFlagAddPlayer(pNetworkPlayer);
+	}
 
 	for( unsigned int i = 0; i < m_playerFlags.size(); i++ )
 	{
@@ -489,7 +677,16 @@ wstring CPlatformNetworkManagerStub::GatherRTTStats()
 
 	for(unsigned int i = 0; i < GetPlayerCount(); ++i)
 	{
-		IQNetPlayer *pQNetPlayer = ((NetworkPlayerXbox *)GetPlayerByIndex( i ))->GetQNetPlayer();
+		INetworkPlayer *networkPlayer = GetPlayerByIndex(i);
+		if(networkPlayer == NULL)
+		{
+			continue;
+		}
+		IQNetPlayer *pQNetPlayer = m_pIQNet->GetPlayerBySmallId(networkPlayer->GetSmallId());
+		if(pQNetPlayer == NULL)
+		{
+			continue;
+		}
 
 		if(!pQNetPlayer->IsLocal())
 		{
@@ -583,27 +780,105 @@ INetworkPlayer *CPlatformNetworkManagerStub::getNetworkPlayer(IQNetPlayer *pQNet
 
 INetworkPlayer *CPlatformNetworkManagerStub::GetLocalPlayerByUserIndex(int userIndex )
 {
-	return getNetworkPlayer(m_pIQNet->GetLocalPlayerByUserIndex(userIndex)); 
+	IQNetPlayer *qnetPlayer = m_pIQNet->GetLocalPlayerByUserIndex(userIndex);
+	INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+	if(player == NULL && qnetPlayer != NULL)
+	{
+		player = addNetworkPlayer(qnetPlayer);
+	}
+	return player;
 }
 
 INetworkPlayer *CPlatformNetworkManagerStub::GetPlayerByIndex(int playerIndex)
 {
-	return getNetworkPlayer(m_pIQNet->GetPlayerByIndex(playerIndex));
+	std::vector<INetworkPlayer *> players;
+
+	const int qnetCount = m_pIQNet->GetPlayerCount();
+	for(int i = 0; i < qnetCount; ++i)
+	{
+		IQNetPlayer *qnetPlayer = m_pIQNet->GetPlayerByIndex(i);
+		INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+		if(player == NULL && qnetPlayer != NULL)
+		{
+			player = addNetworkPlayer(qnetPlayer);
+		}
+		AppendUniquePlayer(players, player);
+	}
+
+	const int directCount = Socket::GetDirectPlayerCount();
+	for(int i = 0; i < directCount; ++i)
+	{
+		AppendUniquePlayer(players, Socket::GetDirectPlayerByIndex(i));
+	}
+
+	if(playerIndex < 0 || playerIndex >= (int)players.size())
+	{
+		return NULL;
+	}
+
+	return players[playerIndex];
 }
 
 INetworkPlayer * CPlatformNetworkManagerStub::GetPlayerByXuid(PlayerUID xuid)
 {
-	return getNetworkPlayer( m_pIQNet->GetPlayerByXuid(xuid)) ;
+	IQNetPlayer *qnetPlayer = m_pIQNet->GetPlayerByXuid(xuid);
+	INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+	if(player == NULL && qnetPlayer != NULL)
+	{
+		player = addNetworkPlayer(qnetPlayer);
+	}
+	if(player != NULL)
+	{
+		return player;
+	}
+
+	const int directCount = Socket::GetDirectPlayerCount();
+	for(int i = 0; i < directCount; ++i)
+	{
+		INetworkPlayer *directPlayer = Socket::GetDirectPlayerByIndex(i);
+		if(directPlayer != NULL && ProfileManager.AreXUIDSEqual(directPlayer->GetUID(), xuid))
+		{
+			return directPlayer;
+		}
+	}
+	return NULL;
 }
 
 INetworkPlayer * CPlatformNetworkManagerStub::GetPlayerBySmallId(unsigned char smallId)
 {
-	return getNetworkPlayer(m_pIQNet->GetPlayerBySmallId(smallId));
+	IQNetPlayer *qnetPlayer = m_pIQNet->GetPlayerBySmallId(smallId);
+	INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+	if(player == NULL && qnetPlayer != NULL)
+	{
+		player = addNetworkPlayer(qnetPlayer);
+	}
+	if(player != NULL && player->GetSmallId() == smallId)
+	{
+		return player;
+	}
+
+	return Socket::GetDirectPlayerBySmallId(smallId);
 }
 
 INetworkPlayer *CPlatformNetworkManagerStub::GetHostPlayer()
 {
-	return getNetworkPlayer(m_pIQNet->GetHostPlayer());
+	const int directCount = Socket::GetDirectPlayerCount();
+	for(int i = 0; i < directCount; ++i)
+	{
+		INetworkPlayer *directPlayer = Socket::GetDirectPlayerByIndex(i);
+		if(directPlayer != NULL && directPlayer->IsHost())
+		{
+			return directPlayer;
+		}
+	}
+
+	IQNetPlayer *qnetPlayer = m_pIQNet->GetHostPlayer();
+	INetworkPlayer *player = getNetworkPlayer(qnetPlayer);
+	if(player == NULL && qnetPlayer != NULL)
+	{
+		player = addNetworkPlayer(qnetPlayer);
+	}
+	return player;
 }
 
 bool CPlatformNetworkManagerStub::IsHost()

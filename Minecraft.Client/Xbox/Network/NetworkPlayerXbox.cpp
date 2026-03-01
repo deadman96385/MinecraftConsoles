@@ -17,26 +17,38 @@ void NetworkPlayerXbox::SendData(INetworkPlayer *player, const void *pvData, int
 	DWORD flags;
 	flags = QNET_SENDDATA_RELIABLE | QNET_SENDDATA_SEQUENTIAL;
 	if( lowPriority ) flags |= QNET_SENDDATA_LOW_PRIORITY | QNET_SENDDATA_SECONDARY;
-	m_qnetPlayer->SendData(((NetworkPlayerXbox *)player)->m_qnetPlayer, pvData, dataSize, flags);
+	NetworkPlayerXbox *networkPlayer = dynamic_cast<NetworkPlayerXbox *>(player);
+	if(networkPlayer == NULL)
+	{
+		return;
+	}
+	m_qnetPlayer->SendData(networkPlayer->m_qnetPlayer, pvData, dataSize, flags);
 }
 
 bool NetworkPlayerXbox::IsSameSystem(INetworkPlayer *player)
 {
-	return ( m_qnetPlayer->IsSameSystem(((NetworkPlayerXbox *)player)->m_qnetPlayer) == TRUE );
+	NetworkPlayerXbox *networkPlayer = dynamic_cast<NetworkPlayerXbox *>(player);
+	if(networkPlayer == NULL)
+	{
+		return false;
+	}
+	return ( m_qnetPlayer->IsSameSystem(networkPlayer->m_qnetPlayer) == TRUE );
 }
 
 int NetworkPlayerXbox::GetSendQueueSizeBytes( INetworkPlayer *player, bool lowPriority )
 {
 	DWORD flags = QNET_GETSENDQUEUESIZE_BYTES;
 	if( lowPriority ) flags |= QNET_GETSENDQUEUESIZE_SECONDARY_TYPE;
-	return m_qnetPlayer->GetSendQueueSize(player ? ((NetworkPlayerXbox *)player)->m_qnetPlayer : NULL , flags);
+	NetworkPlayerXbox *networkPlayer = dynamic_cast<NetworkPlayerXbox *>(player);
+	return m_qnetPlayer->GetSendQueueSize(networkPlayer ? networkPlayer->m_qnetPlayer : NULL , flags);
 }
 
 int NetworkPlayerXbox::GetSendQueueSizeMessages( INetworkPlayer *player, bool lowPriority )
 {
 	DWORD flags = QNET_GETSENDQUEUESIZE_MESSAGES;
 	if( lowPriority ) flags |= QNET_GETSENDQUEUESIZE_SECONDARY_TYPE;
-	return m_qnetPlayer->GetSendQueueSize(player ? ((NetworkPlayerXbox *)player)->m_qnetPlayer : NULL , flags);
+	NetworkPlayerXbox *networkPlayer = dynamic_cast<NetworkPlayerXbox *>(player);
+	return m_qnetPlayer->GetSendQueueSize(networkPlayer ? networkPlayer->m_qnetPlayer : NULL , flags);
 }
 
 int NetworkPlayerXbox::GetCurrentRtt()
@@ -118,4 +130,3 @@ IQNetPlayer *NetworkPlayerXbox::GetQNetPlayer()
 {
 	return m_qnetPlayer;
 }
-
