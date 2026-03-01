@@ -823,7 +823,6 @@ app.DebugPrintf("width: %d, height: %d\n", width, height);
 
 	// Create a depth stencil buffer
 	D3D11_TEXTURE2D_DESC descDepth;
-	ZeroMemory(&descDepth, sizeof(descDepth));
 
 	descDepth.Width = width;
 	descDepth.Height = height;
@@ -945,18 +944,21 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 	WCHAR exePath[MAX_PATH] = { 0 };
 	GetModuleFileNameW(NULL, exePath, MAX_PATH);
 	WCHAR* lastSlash = wcsrchr(exePath, L'\\');
-	if (lastSlash) {
+	if (lastSlash)
+	{
 		*lastSlash = L'\0';
 
 		WCHAR devCheckPath[MAX_PATH] = { 0 };
 		swprintf_s(devCheckPath, MAX_PATH, L"%s\\..\\..\\Minecraft.Client\\Minecraft.Client.vcxproj", exePath);
 
-		if (GetFileAttributesW(devCheckPath) != INVALID_FILE_ATTRIBUTES) {
+		if (GetFileAttributesW(devCheckPath) != INVALID_FILE_ATTRIBUTES)
+		{
 			WCHAR projectPath[MAX_PATH] = { 0 };
 			swprintf_s(projectPath, MAX_PATH, L"%s\\..\\..\\Minecraft.Client", exePath);
 			SetCurrentDirectoryW(projectPath);
 		}
-		else {
+		else
+		{
 			SetCurrentDirectoryW(exePath);
 		}
 	}
@@ -1542,7 +1544,7 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 		// Update mouse capture: capture when in-game and no menu is open
 		{
 			static bool altToggleSuppressCapture = false;
-			bool shouldCapture = app.GetGameStarted() && !ui.GetMenuDisplayed(0) && pMinecraft->screen == NULL;
+			bool shouldCapture = app.GetGameStarted() && (!ui.GetMenuDisplayed(0) || ui.IsContainerMenuDisplayed(0));
 			// Left Alt key toggles capture on/off for debugging
 			if (KMInput.IsKeyPressed(VK_MENU))
 			{
