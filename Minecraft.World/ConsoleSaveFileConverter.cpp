@@ -4,6 +4,7 @@
 #include "ConsoleSaveFileIO.h"
 #include "ConsoleSaveFileConverter.h"
 #include "ProgressListener.h"
+#include "..\Minecraft.Client\Common\GameRules\LevelGenerationOptions.h"
 
 void ConsoleSaveFileConverter::ProcessSimpleFile(ConsoleSaveFile *sourceSave, FileEntry *sourceFileEntry, ConsoleSaveFile *targetSave, FileEntry *targetFileEntry)
 {
@@ -126,6 +127,19 @@ void ConsoleSaveFileConverter::ConvertSave(ConsoleSaveFile *sourceSave, ConsoleS
 		hellScale = ret.getHellScale();
 
 		delete root;
+	}
+
+	// DLC base-save worlds can carry more authored chunks than legacy level.dat size values.
+	// If we clamp conversion to legacy xzSize, outer authored regions are skipped and vanilla
+	// terrain generation appears to "cut through" custom structures.
+	LevelGenerationOptions *levelGen = app.getLevelGenerationOptions();
+	if(levelGen != NULL && levelGen->requiresBaseSave())
+	{
+		if(xzSize < LEVEL_MAX_WIDTH)
+		{
+			app.DebugPrintf("ConsoleSaveFileConverter::ConvertSave - overriding base-save xzSize from %d to %d for full region conversion\n", xzSize, LEVEL_MAX_WIDTH);
+		}
+		xzSize = LEVEL_MAX_WIDTH;
 	}
 
 	RegionFileCache sourceCache;

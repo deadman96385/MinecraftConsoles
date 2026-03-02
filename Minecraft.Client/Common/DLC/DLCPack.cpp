@@ -11,10 +11,28 @@
 #include "DLCColourTableFile.h"
 #include "..\..\..\Minecraft.World\StringHelpers.h"
 
+static wstring trimWhitespace(const wstring &value)
+{
+	if(value.empty())
+	{
+		return value;
+	}
+
+	const wchar_t *ws = L" \t\r\n";
+	size_t start = value.find_first_not_of(ws);
+	if(start == wstring::npos)
+	{
+		return L"";
+	}
+
+	size_t end = value.find_last_not_of(ws);
+	return value.substr(start, end - start + 1);
+}
+
 DLCPack::DLCPack(const wstring &name,DWORD dwLicenseMask)
 {
 	m_dataPath = L"";
-	m_packName = name;
+	m_packName = trimWhitespace(name);
 	m_dwLicenseMask=dwLicenseMask;
 #ifdef _XBOX_ONE
 	m_wsProductId = L"";
@@ -38,7 +56,7 @@ DLCPack::DLCPack(const wstring &name,DWORD dwLicenseMask)
 DLCPack::DLCPack(const wstring &name,const wstring &productID,DWORD dwLicenseMask)
 {
 	m_dataPath = L"";
-	m_packName = name;
+	m_packName = trimWhitespace(name);
 	m_dwLicenseMask=dwLicenseMask;
 	m_wsProductId = productID;
 	m_isCorrupt = false;
@@ -148,10 +166,10 @@ void DLCPack::addParameter(DLCManager::EDLCParameterType type, const wstring &va
 		}
 		break;
 	case DLCManager::e_DLCParamType_DisplayName:
-		m_packName = value;
+		m_packName = trimWhitespace(value);
 		break;
 	case DLCManager::e_DLCParamType_DataPath:
-		m_dataPath = value;
+		m_dataPath = trimWhitespace(value);
 		break;
 	default:
 		m_parameters[(int)type] = value;

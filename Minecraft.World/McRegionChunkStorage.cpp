@@ -144,16 +144,11 @@ LevelChunk *McRegionChunkStorage::load(Level *level, int x, int z)
 			sprintf(buf,"Chunk file at %d, %d is in the wrong location; relocating. Expected %d, %d, got %d, %d\n",
 				x, z, x, z, levelChunk->x, levelChunk->z);
 			app.DebugPrintf(buf);
-			delete levelChunk;
-			delete chunkData;
-			return NULL;
-
-			// 4J Stu - We delete the data within OldChunkStorage::load, so we can never reload from it
-			//chunkData->putInt(L"xPos", x);
-			//chunkData->putInt(L"zPos", z);
-			//MemSect(10);
-			//levelChunk = OldChunkStorage::load(level, chunkData->getCompound(L"Level"));
-			//MemSect(0);
+			// Some imported DLC/base-save chunks carry stale xPos/zPos values.
+			// Dropping them causes holes and fallback generation to cut through authored terrain.
+			// Keep the chunk payload and rebind runtime coordinates to the requested slot.
+			levelChunk->x = x;
+			levelChunk->z = z;
 		}
 #ifdef SPLIT_SAVES
 		loadEntities(level, levelChunk);

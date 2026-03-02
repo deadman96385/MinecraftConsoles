@@ -1440,6 +1440,12 @@ void CScene_LoadGameSettings::LoadLevelGen(LevelGenerationOptions *levelGen)
 	param->seed = 0;
 	param->saveData = NULL;
 	param->levelGen = levelGen;
+	if(levelGen->requiresBaseSave())
+	{
+		param->xzSize = LEVEL_MAX_WIDTH;
+		param->hellScale = HELL_LEVEL_MAX_SCALE;
+		app.DebugPrintf("CScene_LoadGameSettings::LoadLevelGen - forcing max world size for base save (xzSize=%d hellScale=%d)\n", param->xzSize, param->hellScale);
+	}
 
 	if(levelGen->requiresTexturePack())
 	{

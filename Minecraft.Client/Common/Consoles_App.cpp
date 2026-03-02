@@ -231,6 +231,40 @@ CMinecraftApp::CMinecraftApp()
 
 
 
+#if defined(_WINDOWS64) && !defined(_FINAL_BUILD)
+static void AppendRuntimeDebugLog(const char *text)
+{
+	if(text == NULL)
+	{
+		return;
+	}
+
+	char exePath[MAX_PATH] = { 0 };
+	DWORD pathLen = GetModuleFileNameA(NULL, exePath, MAX_PATH);
+	if(pathLen == 0 || pathLen >= MAX_PATH)
+	{
+		return;
+	}
+
+	char *lastSlash = strrchr(exePath, '\\');
+	if(lastSlash == NULL)
+	{
+		return;
+	}
+	*(lastSlash + 1) = '\0';
+
+	char logPath[MAX_PATH] = { 0 };
+	snprintf(logPath, MAX_PATH, "%s%s", exePath, "RuntimeDebug.log");
+
+	FILE *debugFile = NULL;
+	if(fopen_s(&debugFile, logPath, "a") == 0 && debugFile != NULL)
+	{
+		fputs(text, debugFile);
+		fclose(debugFile);
+	}
+}
+#endif
+
 void CMinecraftApp::DebugPrintf(const char *szFormat, ...)
 {
 
@@ -241,6 +275,9 @@ void CMinecraftApp::DebugPrintf(const char *szFormat, ...)
 	vsnprintf(buf, sizeof(buf), szFormat, ap);
 	va_end(ap);
 	OutputDebugStringA(buf);
+#if defined(_WINDOWS64)
+	AppendRuntimeDebugLog(buf);
+#endif
 #endif
 
 }
@@ -255,6 +292,9 @@ void CMinecraftApp::DebugPrintf(int user, const char *szFormat, ...)
 	va_start(ap, szFormat);
 	vsnprintf(buf, sizeof(buf), szFormat, ap);
 	va_end(ap);
+#if defined(_WINDOWS64)
+	AppendRuntimeDebugLog(buf);
+#endif
 #ifdef __PS3__
 	unsigned int writelen;
 	sys_tty_write(SYS_TTYP_USER1 + ( user - 1 ), buf, strlen(buf), &writelen );
@@ -5036,7 +5076,14 @@ bool CMinecraftApp::StartInstallDLCProcess(int iPad)
 		m_iTotalDLCInstalled = 0;
 		app.DebugPrintf("--- CMinecraftApp::StartInstallDLCProcess - StorageManager.GetInstalledDLC\n");
 
-		StorageManager.GetInstalledDLC(iPad,&CMinecraftApp::DLCInstalledCallback,this);
+		C4JStorage::EDLCStatus dlcStatus = StorageManager.GetInstalledDLC(iPad,&CMinecraftApp::DLCInstalledCallback,this);
+		#if defined(_WINDOWS64)
+		if(dlcStatus != C4JStorage::EDLC_Pending && dlcStatus != C4JStorage::EDLC_LoadInProgress)
+		{
+			app.DebugPrintf("--- CMinecraftApp::StartInstallDLCProcess - GetInstalledDLC returned %d, using local fallback.\n", dlcStatus);
+			app.InstallLocalWindowsDLCContent();
+		}
+		#endif
 		return true;
 	}
 	else
@@ -5053,6 +5100,14 @@ int CMinecraftApp::DLCInstalledCallback(LPVOID pParam,int iInstalledC,int iPad)
 {
 	app.DebugPrintf("--- CMinecraftApp::DLCInstalledCallback: totalDLC=%i, pad=%i.\n", iInstalledC, iPad);
 	app.m_iTotalDLC = iInstalledC;
+	#if defined(_WINDOWS64)
+	if(iInstalledC <= 0)
+	{
+		app.DebugPrintf("--- CMinecraftApp::DLCInstalledCallback: no installed DLC reported, using local Windows64 fallback.\n");
+		app.InstallLocalWindowsDLCContent();
+		return 0;
+	}
+	#endif
 	app.MountNextDLC(iPad);
 	return 0;
 }
@@ -5279,8 +5334,116 @@ int CMinecraftApp::DLCMountedCallback(LPVOID pParam,int iPad,DWORD dwErr,DWORD d
 	}
 #endif // __PS3__ || __ORBIS__
 
-	if( dwFilesProcessed == 0 ) m_dlcManager.removePack(pack);
+ if( dwFilesProcessed == 0 ) m_dlcManager.removePack(pack);
  }
+
+#ifdef _WINDOWS64
+bool CMinecraftApp::InstallLocalWindowsDLCContent()
+{
+	Minecraft *minecraft = Minecraft::GetInstance();
+	if(minecraft == NULL || minecraft->skins == NULL)
+	{
+		app.DebugPrintf("--- CMinecraftApp::InstallLocalWindowsDLCContent: Minecraft skin repository not ready, deferring.\n");
+		m_bDLCInstallPending = false;
+		return false;
+	}
+
+	const char *roots[] =
+	{
+		"Windows64Media\\DLC",
+		"DurangoMedia\\DLC",
+		"..\\..\\Minecraft.Client\\Windows64Media\\DLC",
+		"..\\..\\Minecraft.Client\\DurangoMedia\\DLC",
+		"Minecraft.Client\\Windows64Media\\DLC",
+		"Minecraft.Client\\DurangoMedia\\DLC"
+	};
+
+	DWORD loadedPackCount = 0;
+
+	for(unsigned int rootIdx = 0; rootIdx < _countof(roots); ++rootIdx)
+	{
+		const char *root = roots[rootIdx];
+		char wildcardPath[MAX_PATH];
+		sprintf(wildcardPath, "%s\\*", root);
+
+		WIN32_FIND_DATAA findData;
+		HANDLE findHandle = FindFirstFileA(wildcardPath, &findData);
+		if(findHandle == INVALID_HANDLE_VALUE)
+		{
+			continue;
+		}
+
+		do
+		{
+			if((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+			{
+				continue;
+			}
+
+			if(strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0)
+			{
+				continue;
+			}
+
+			wstring packName = convStringToWstring(findData.cFileName);
+			DLCPack *existingPack = m_dlcManager.getPack(packName);
+			if(existingPack != NULL)
+			{
+				continue;
+			}
+
+			DLCPack *pack = new DLCPack(packName, 0xffffffff);
+			DWORD filesProcessed = 0;
+
+			char packFolder[MAX_PATH];
+			sprintf(packFolder, "%s\\%s", root, findData.cFileName);
+
+			char pckWildcard[MAX_PATH];
+			sprintf(pckWildcard, "%s\\*.pck", packFolder);
+
+			WIN32_FIND_DATAA pckData;
+			HANDLE pckHandle = FindFirstFileA(pckWildcard, &pckData);
+			if(pckHandle != INVALID_HANDLE_VALUE)
+			{
+				do
+				{
+					if((pckData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+					{
+						char fullPath[MAX_PATH];
+						sprintf(fullPath, "%s\\%s", packFolder, pckData.cFileName);
+						m_dlcManager.readDLCDataFile(filesProcessed, string(fullPath), pack);
+					}
+				}
+				while(FindNextFileA(pckHandle, &pckData));
+				FindClose(pckHandle);
+			}
+
+			if(filesProcessed > 0)
+			{
+				m_dlcManager.addPack(pack);
+				++loadedPackCount;
+			}
+			else
+			{
+				delete pack;
+			}
+		}
+		while(FindNextFileA(findHandle, &findData));
+
+		FindClose(findHandle);
+	}
+
+	m_bDLCInstallPending = false;
+	m_bDLCInstallProcessCompleted = true;
+	if(m_bResourcesLoaded)
+	{
+		ui.HandleDLCMountingComplete();
+	}
+
+	app.DebugPrintf("--- CMinecraftApp::InstallLocalWindowsDLCContent: loaded packs=%d.\n", loadedPackCount);
+	return loadedPackCount > 0;
+}
+#endif
 
 //  int CMinecraftApp::DLCReadCallback(LPVOID pParam,C4JStorage::DLC_FILE_DETAILS *pDLCData)
 //  {

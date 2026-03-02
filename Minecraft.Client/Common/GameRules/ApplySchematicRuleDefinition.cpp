@@ -9,6 +9,33 @@
 #include "LevelGenerationOptions.h"
 #include "ConsoleSchematicFile.h"
 
+static void AppendDlcWorldBoundsLog(const wchar_t *line)
+{
+	wchar_t exePath[MAX_PATH];
+	DWORD len = GetModuleFileNameW(NULL, exePath, MAX_PATH);
+	if(len == 0 || len >= MAX_PATH)
+	{
+		return;
+	}
+
+	wchar_t *slash = wcsrchr(exePath, L'\\');
+	if(slash == NULL)
+	{
+		return;
+	}
+	*slash = 0;
+
+	wstring logPath = wstring(exePath) + L"\\dlc_world_bounds.log";
+	FILE *f = _wfopen(logPath.c_str(), L"a");
+	if(f == NULL)
+	{
+		return;
+	}
+
+	fwprintf(f, L"%ls\n", line);
+	fclose(f);
+}
+
 ApplySchematicRuleDefinition::ApplySchematicRuleDefinition(LevelGenerationOptions *levelGenOptions)
 {
 	m_levelGenOptions = levelGenOptions;
@@ -154,6 +181,26 @@ void ApplySchematicRuleDefinition::updateLocationBox()
 		m_locationBox->z1 = m_location->z + m_schematic->getZSize();
 		break;
 	};
+
+	wchar_t logLine[1024];
+	swprintf(
+		logLine,
+		1024,
+		L"ApplySchematic bounds name=%ls dim=%d rot=%d box=[x:%d..%d y:%d..%d z:%d..%d] size=[x:%d y:%d z:%d]",
+		m_schematicName.c_str(),
+		m_dimension,
+		(int)m_rotation,
+		(int)m_locationBox->x0,
+		(int)m_locationBox->x1,
+		(int)m_locationBox->y0,
+		(int)m_locationBox->y1,
+		(int)m_locationBox->z0,
+		(int)m_locationBox->z1,
+		m_schematic->getXSize(),
+		m_schematic->getYSize(),
+		m_schematic->getZSize());
+	app.DebugPrintf("%ls\n", logLine);
+	AppendDlcWorldBoundsLog(logLine);
 }
 
 void ApplySchematicRuleDefinition::processSchematic(AABB *chunkBox, LevelChunk *chunk)

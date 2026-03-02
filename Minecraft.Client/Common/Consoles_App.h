@@ -317,6 +317,9 @@ public:
 	void MountNextDLC(int iPad);
 	//static int DLCReadCallback(LPVOID pParam,C4JStorage::DLC_FILE_DETAILS *pDLCData);
 	void HandleDLC(DLCPack *pack);
+	#ifdef _WINDOWS64
+	bool InstallLocalWindowsDLCContent();
+	#endif
 	bool DLCInstallPending()	{return m_bDLCInstallPending;}
 	bool DLCInstallProcessCompleted()	{return m_bDLCInstallProcessCompleted;}
 	void ClearDLCInstalled()	{ m_bDLCInstallProcessCompleted=false;}

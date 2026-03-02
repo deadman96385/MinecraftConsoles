@@ -1821,6 +1821,12 @@ void UIScene_LoadOrJoinMenu::LoadLevelGen(LevelGenerationOptions *levelGen)
     param->saveData = NULL;
     param->settings = app.GetGameHostOption( eGameHostOption_Tutorial );
     param->levelGen = levelGen;
+    if(levelGen->requiresBaseSave())
+    {
+        param->xzSize = LEVEL_MAX_WIDTH;
+        param->hellScale = HELL_LEVEL_MAX_SCALE;
+        app.DebugPrintf("UIScene_LoadOrJoinMenu::LoadLevelGen - forcing max world size for base save (xzSize=%d hellScale=%d)\n", param->xzSize, param->hellScale);
+    }
 
     if(levelGen->requiresTexturePack())
     {

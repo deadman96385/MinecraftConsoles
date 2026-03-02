@@ -286,10 +286,11 @@ void SoundEngine::init(Options *pOptions)
 	{
 		app.DebugPrintf("Couldn't init event system (%s).\n", AIL_last_error());
 		AIL_close_digital_driver(m_hDriver);
+		m_hDriver = 0;
 		AIL_shutdown();
 #ifdef __ORBIS__
 		C4JThread::PopAffinity();
-#endif 
+#endif
 		app.DebugPrintf("---SoundEngine::init - AIL_startup_event_system failed\n");
 		return;
 	}
@@ -317,7 +318,13 @@ void SoundEngine::init(Options *pOptions)
 	strcpy((char *)szBankName,m_szSoundPath);
 #endif
 
+#ifdef _WINDOWS64
+	// Windows uses a separately-compiled soundbank (Effects.msscmp) in the exe root directory,
+	// as the Durango Minecraft.msscmp uses an incompatible Miles format version.
+	strcpy((char *)szBankName, "Effects.msscmp");
+#else
 	strcat((char *)szBankName,"Minecraft.msscmp");
+#endif
 
 	m_hBank=AIL_add_soundbank(szBankName, 0);
 
@@ -326,10 +333,11 @@ void SoundEngine::init(Options *pOptions)
 		char *Error=AIL_last_error();
 		app.DebugPrintf("Couldn't open soundbank: %s (%s)\n", szBankName, Error);
 		AIL_close_digital_driver(m_hDriver);
+		m_hDriver = 0;
 		AIL_shutdown();
 #ifdef __ORBIS__
 		C4JThread::PopAffinity();
-#endif 
+#endif
 		return;
 	}
 
@@ -403,6 +411,7 @@ void SoundEngine::SetStreamingSounds(int iOverworldMin, int iOverWorldMax, int i
 // AP - moved to a separate function so it can be called from the mixer callback on Vita
 void SoundEngine::updateMiles()
 {
+	if (m_hDriver == 0) return;
 #ifdef __PSVITA__ 
 	//CD - We must check for Background Music [BGM] at any point
 	//If it's playing disable our audio, otherwise enable
@@ -753,6 +762,8 @@ void SoundEngine::GetSoundName(char *szSoundName,int iSound)
 /////////////////////////////////////////////
 void SoundEngine::play(int iSound, float x, float y, float z, float volume, float pitch)
 {
+	if (m_hBank == NULL) return;
+
 	U8 szSoundName[256];
 
 	if(iSound==-1)
@@ -810,8 +821,10 @@ void SoundEngine::play(int iSound, float x, float y, float z, float volume, floa
 //	playUI
 //
 /////////////////////////////////////////////
-void SoundEngine::playUI(int iSound, float volume, float pitch) 
+void SoundEngine::playUI(int iSound, float volume, float pitch)
 {
+	if (m_hBank == NULL) return;
+
 	U8 szSoundName[256];
 	wstring name;
 	// we have some game sounds played as UI sounds...
@@ -874,6 +887,7 @@ void SoundEngine::playUI(int iSound, float volume, float pitch)
 /////////////////////////////////////////////
 void SoundEngine::playStreaming(const wstring& name, float x, float y , float z, float volume, float pitch, bool bMusicDelay)
 {
+
 	// This function doesn't actually play a streaming sound, just sets states and an id for the music tick to play it
 	// Level audio will be played when a play with an empty name comes in
 	// CD audio will be played when a named stream comes in
@@ -1137,7 +1151,7 @@ int SoundEngine::OpenStreamThreadProc( void* lpParameter )
 //	playMusicTick
 //
 /////////////////////////////////////////////
-void SoundEngine::playMusicTick() 
+void SoundEngine::playMusicTick()
 {
 // AP - vita will update the music during the mixer callback
 #ifndef __PSVITA__
@@ -1146,8 +1160,9 @@ void SoundEngine::playMusicTick()
 }
 
 // AP - moved to a separate function so it can be called from the mixer callback on Vita
-void SoundEngine::playMusicUpdate() 
+void SoundEngine::playMusicUpdate()
 {
+	if (m_hDriver == 0) return;
 	//return;
 	static bool firstCall = true;
 	static float fMusicVol = 0.0f;
@@ -1227,7 +1242,25 @@ void SoundEngine::playMusicUpdate()
 
 					string strFile="TPACK:\\Data\\" + string(szName) + ".binka";
 					std::string mountedPath = StorageManager.GetMountedPath(strFile);
-					strcpy(m_szStreamName,mountedPath.c_str());
+					if(!mountedPath.empty())
+					{
+						strcpy(m_szStreamName,mountedPath.c_str());
+					}
+					else
+					{
+						char packName[255];
+						wcstombs(packName, pack->getName().c_str(), 255);
+						packName[254] = '\0';
+
+						// Windows DLC path fallback when TPACK mount alias is not available.
+						// DurangoMedia is mapped to Windows64Media in the output by the build.
+						sprintf(m_szStreamName, "Windows64Media\\DLC\\%s\\Data\\%s.binka",
+							packName,
+							szName);
+						app.DebugPrintf("SoundEngine::playMusicUpdate - mounted path missing for %s, using fallback %s\n",
+							strFile.c_str(),
+							m_szStreamName);
+					}
 #endif
 				}
 				else
@@ -1319,6 +1352,14 @@ void SoundEngine::playMusicUpdate()
 			// 			strcat((char *)szStreamName,SoundName);
 
 
+			if(m_szStreamName[0] == '\0')
+			{
+				app.DebugPrintf("SoundEngine::playMusicUpdate - empty stream name, skipping stream open.\n");
+				m_musicID = -1;
+				m_iMusicDelay = 20 * 10;
+				break;
+			}
+
 			app.DebugPrintf("Starting streaming - %s\n",m_szStreamName);
 
 			// Don't actually open in this thread, as it can block for ~300ms. 
@@ -1335,7 +1376,16 @@ void SoundEngine::playMusicUpdate()
 			delete m_openStreamThread;
 			m_openStreamThread = NULL;
 
-			HSAMPLE hSample = AIL_stream_sample_handle( m_hStream); 
+			if (m_hStream == 0)
+			{
+				app.DebugPrintf("SoundEngine::playMusicUpdate - failed to open stream: %s\n", m_szStreamName);
+				m_musicID = -1;
+				m_iMusicDelay = 20 * 10;  // retry after ~10 seconds
+				m_StreamState = eMusicStreamState_Idle;
+				break;
+			}
+
+			HSAMPLE hSample = AIL_stream_sample_handle( m_hStream);
 
 			// 4J-PB - causes the falloff to be calculated on the PPU instead of the SPU, and seems to resolve our distorted sound issue
 			AIL_register_falloff_function_callback(hSample,&custom_falloff_function);
@@ -1625,9 +1675,12 @@ void SoundEngine::playMusicUpdate()
 /////////////////////////////////////////////
 char *SoundEngine::ConvertSoundPathToName(const wstring& name, bool bConvertSpaces)
 {
-	static char buf[256];
-	assert(name.length()<256);
-	for(unsigned int i = 0; i < name.length(); i++ )
+	// Sound names can be built concurrently from multiple threads (game/update/network),
+	// so a single shared static buffer is unsafe.
+	__declspec(thread) static char buf[256];
+	const size_t maxLen = sizeof(buf) - 1;
+	const size_t writeLen = (name.length() < maxLen) ? name.length() : maxLen;
+	for(size_t i = 0; i < writeLen; i++ )
 	{
 		wchar_t c = name[i];
 		if(c=='.') c='/';
@@ -1637,7 +1690,7 @@ char *SoundEngine::ConvertSoundPathToName(const wstring& name, bool bConvertSpac
 		}
 		buf[i] = (char)c;
 	}
-	buf[name.length()] = 0;
+	buf[writeLen] = 0;
 	return buf;
 }
 

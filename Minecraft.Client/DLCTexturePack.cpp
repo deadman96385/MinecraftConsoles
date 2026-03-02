@@ -235,30 +235,357 @@ void DLCTexturePack::loadColourTable()
 void DLCTexturePack::loadData()
 {
 	int mountIndex = m_dlcInfoPack->GetDLCMountIndex();
+	app.DebugPrintf("DLCTexturePack::loadData - pack=%s mountIndex=%d fullDataPath=%s\n",
+		wstringtofilename(m_dlcInfoPack->getName()),
+		mountIndex,
+		wstringtofilename(m_dlcInfoPack->getFullDataPath()));
 
 	if(mountIndex > -1)
 	{
+		DWORD mountResult = ERROR_SUCCESS;
 #ifdef _DURANGO
-		if(StorageManager.MountInstalledDLC(ProfileManager.GetPrimaryPad(),mountIndex,&DLCTexturePack::packMounted,this,L"TPACK")!=ERROR_IO_PENDING)
+		mountResult = StorageManager.MountInstalledDLC(ProfileManager.GetPrimaryPad(),mountIndex,&DLCTexturePack::packMounted,this,L"TPACK");
 #else
-		if(StorageManager.MountInstalledDLC(ProfileManager.GetPrimaryPad(),mountIndex,&DLCTexturePack::packMounted,this,"TPACK")!=ERROR_IO_PENDING)
+		mountResult = StorageManager.MountInstalledDLC(ProfileManager.GetPrimaryPad(),mountIndex,&DLCTexturePack::packMounted,this,"TPACK");
 #endif
+		if(mountResult!=ERROR_IO_PENDING)
 		{
 			// corrupt DLC
 			m_bHasLoadedData = true;
 			if (app.getLevelGenerationOptions()) app.getLevelGenerationOptions()->setLoadedData();
-			app.DebugPrintf("Failed to mount texture pack DLC %d for pad %d\n",mountIndex,ProfileManager.GetPrimaryPad());	
+			app.DebugPrintf("DLCTexturePack::loadData - mount failed immediately, pack=%s mountIndex=%d pad=%d ret=%d\n",
+				wstringtofilename(m_dlcInfoPack->getName()), mountIndex, ProfileManager.GetPrimaryPad(), mountResult);
 		}
 		else
 		{
 			m_bLoadingData = true;
-			app.DebugPrintf("Attempted to mount DLC data for texture pack %d\n", mountIndex);
+			app.DebugPrintf("DLCTexturePack::loadData - mount pending, pack=%s mountIndex=%d\n",
+				wstringtofilename(m_dlcInfoPack->getName()), mountIndex);
 		}
 	}
 	else
 	{
+	#ifdef _WINDOWS64
+		wstring dataFilePath = m_dlcInfoPack->getFullDataPath();
+		if(!dataFilePath.empty())
+		{
+			setHasAudio(false);
+			if(m_dlcDataPack == NULL)
+			{
+				m_dlcDataPack = new DLCPack(m_dlcInfoPack->getName(), 0xffffffff);
+			}
+
+			wstring dataFileName = dataFilePath;
+			size_t slashIndex = dataFileName.find_last_of(L"/\\");
+			if(slashIndex != wstring::npos)
+			{
+				dataFileName = dataFileName.substr(slashIndex + 1);
+			}
+
+			const WCHAR *roots[] =
+			{
+				L"Windows64Media\\DLC",
+				L"DurangoMedia\\DLC",
+				L"..\\..\\Minecraft.Client\\Windows64Media\\DLC",
+				L"..\\..\\Minecraft.Client\\DurangoMedia\\DLC",
+				L"Minecraft.Client\\Windows64Media\\DLC",
+				L"Minecraft.Client\\DurangoMedia\\DLC"
+			};
+
+			DWORD dwFilesProcessed = 0;
+			wstring loadedPackRoot = L"";
+			for(unsigned int i = 0; i < _countof(roots); ++i)
+			{
+				wstring packRoot = wstring(roots[i]) + L"\\" + m_dlcInfoPack->getName();
+				wstring candidate = packRoot + L"\\Data\\" + dataFileName;
+				File dataFile(candidate);
+				if(!dataFile.exists())
+				{
+					candidate = packRoot + L"\\" + dataFilePath;
+					File alternativeDataFile(candidate);
+					if(!alternativeDataFile.exists())
+					{
+						continue;
+					}
+				}
+
+				if(app.m_dlcManager.readDLCDataFile(dwFilesProcessed, candidate, m_dlcDataPack))
+				{
+					loadedPackRoot = packRoot;
+					app.DebugPrintf("DLCTexturePack::loadData - readDLCDataFile ok, pack=%s root=%s candidate=%s processed=%d\n",
+						wstringtofilename(m_dlcInfoPack->getName()),
+						wstringtofilename(packRoot),
+						wstringtofilename(candidate),
+						dwFilesProcessed);
+					File archivePath(packRoot + L"\\Data\\media.arc");
+					if(!archivePath.exists())
+					{
+						archivePath = File(packRoot + L"\\media.arc");
+					}
+					if(archivePath.exists())
+					{
+						m_archiveFile = new ArchiveFile(archivePath);
+						app.DebugPrintf("DLCTexturePack::loadData - archive loaded: %s\n", wstringtofilename(archivePath.getPath()));
+					}
+					else
+					{
+						app.DebugPrintf("DLCTexturePack::loadData - no media.arc found under root: %s\n", wstringtofilename(packRoot));
+					}
+					break;
+				}
+			}
+
+			if(dwFilesProcessed == 0)
+			{
+				app.DebugPrintf("DLCTexturePack::loadData - Failed to read DLC data for %s, reverting to default colour table.\n", wstringtofilename(m_dlcInfoPack->getName()));
+				delete m_dlcDataPack;
+				m_dlcDataPack = NULL;
+			}
+			else
+			{
+				DLCPack *pack = m_dlcInfoPack->GetParentPack();
+				if(pack == NULL)
+				{
+					pack = m_dlcInfoPack;
+				}
+
+				LevelGenerationOptions *levelGen = app.getLevelGenerationOptions();
+				if(!loadedPackRoot.empty())
+				{
+					app.DebugPrintf("DLCTexturePack::loadData - preparing game rules/base save load: lgo=0x%p loaded=%d ready=%d requiresBaseSave=%d baseSavePath=%s root=%s\n",
+						levelGen,
+						(levelGen != NULL) ? levelGen->hasLoadedData() : 0,
+						(levelGen != NULL) ? levelGen->ready() : 0,
+						(levelGen != NULL) ? levelGen->requiresBaseSave() : 0,
+						(levelGen != NULL) ? wstringtofilename(levelGen->getBaseSavePath()) : "",
+						wstringtofilename(loadedPackRoot));
+					int gameRulesCount = pack->getDLCItemsCount(DLCManager::e_DLCType_GameRulesHeader);
+					for(int i = 0; i < gameRulesCount; ++i)
+					{
+						DLCGameRulesHeader *dlcFile = (DLCGameRulesHeader *) pack->getFile(DLCManager::e_DLCType_GameRulesHeader, i);
+						if(dlcFile->getGrfPath().empty())
+						{
+							continue;
+						}
+
+						wstring grfPath = dlcFile->getGrfPath();
+						wstring grfName = grfPath;
+						size_t grfSlashIndex = grfName.find_last_of(L"/\\");
+						if(grfSlashIndex != wstring::npos)
+						{
+							grfName = grfName.substr(grfSlashIndex + 1);
+						}
+
+						File grf(loadedPackRoot + L"\\Data\\" + grfPath);
+						if(!grf.exists())
+						{
+							grf = File(loadedPackRoot + L"\\" + grfPath);
+						}
+						if(!grf.exists())
+						{
+							grf = File(loadedPackRoot + L"\\Data\\" + grfName);
+						}
+						if(!grf.exists())
+						{
+							grf = File(loadedPackRoot + L"\\" + grfName);
+						}
+
+						if(grf.exists())
+						{
+							#ifdef _UNICODE
+								wstring path = grf.getPath();
+								const WCHAR *pchFilename = path.c_str();
+								HANDLE fileHandle = CreateFile(
+									pchFilename,
+									GENERIC_READ,
+									0,
+									NULL,
+									OPEN_EXISTING,
+									FILE_FLAG_SEQUENTIAL_SCAN,
+									NULL);
+							#else
+								const char *pchFilename = wstringtofilename(grf.getPath());
+								HANDLE fileHandle = CreateFile(
+									pchFilename,
+									GENERIC_READ,
+									0,
+									NULL,
+									OPEN_EXISTING,
+									FILE_FLAG_SEQUENTIAL_SCAN,
+									NULL);
+							#endif
+
+							if(fileHandle != INVALID_HANDLE_VALUE)
+							{
+								DWORD dwFileSize = grf.length();
+								DWORD bytesRead = 0;
+								PBYTE pbData = (PBYTE)new BYTE[dwFileSize];
+								BOOL bSuccess = ReadFile(fileHandle, pbData, dwFileSize, &bytesRead, NULL);
+								CloseHandle(fileHandle);
+								if(bSuccess)
+								{
+									dlcFile->setGrfData(pbData, dwFileSize, m_stringTable);
+									delete [] pbData;
+									app.m_gameRules.setLevelGenerationOptions(dlcFile->lgo);
+								}
+								else
+								{
+									delete [] pbData;
+								}
+							}
+							else
+							{
+								app.DebugPrintf("DLCTexturePack::loadData - Failed to open GRF file: %s\n", wstringtofilename(grf.getPath()));
+							}
+						}
+						else
+						{
+							app.DebugPrintf("DLCTexturePack::loadData - GRF file not found for path: %s\n", wstringtofilename(grfPath));
+						}
+					}
+
+					levelGen = app.getLevelGenerationOptions();
+					if(levelGen->requiresBaseSave() && !levelGen->getBaseSavePath().empty())
+					{
+						wstring baseSavePath = levelGen->getBaseSavePath();
+						wstring baseSaveName = baseSavePath;
+						size_t saveSlashIndex = baseSaveName.find_last_of(L"/\\");
+						if(saveSlashIndex != wstring::npos)
+						{
+							baseSaveName = baseSaveName.substr(saveSlashIndex + 1);
+						}
+
+						File grf(loadedPackRoot + L"\\Data\\" + baseSavePath);
+						if(!grf.exists())
+						{
+							grf = File(loadedPackRoot + L"\\" + baseSavePath);
+						}
+						if(!grf.exists())
+						{
+							grf = File(loadedPackRoot + L"\\Data\\" + baseSaveName);
+						}
+						if(!grf.exists())
+						{
+							grf = File(loadedPackRoot + L"\\" + baseSaveName);
+						}
+
+						if(grf.exists())
+						{
+							#ifdef _UNICODE
+								wstring path = grf.getPath();
+								const WCHAR *pchFilename = path.c_str();
+								HANDLE fileHandle = CreateFile(
+									pchFilename,
+									GENERIC_READ,
+									0,
+									NULL,
+									OPEN_EXISTING,
+									FILE_FLAG_SEQUENTIAL_SCAN,
+									NULL);
+							#else
+								const char *pchFilename = wstringtofilename(grf.getPath());
+								HANDLE fileHandle = CreateFile(
+									pchFilename,
+									GENERIC_READ,
+									0,
+									NULL,
+									OPEN_EXISTING,
+									FILE_FLAG_SEQUENTIAL_SCAN,
+									NULL);
+							#endif
+
+							if(fileHandle != INVALID_HANDLE_VALUE)
+							{
+								DWORD bytesRead = 0;
+								DWORD dwFileSize = GetFileSize(fileHandle, NULL);
+								PBYTE pbData = (PBYTE)new BYTE[dwFileSize];
+								BOOL bSuccess = ReadFile(fileHandle, pbData, dwFileSize, &bytesRead, NULL);
+								CloseHandle(fileHandle);
+								if(bSuccess)
+								{
+									levelGen->setBaseSaveData(pbData, dwFileSize);
+									app.DebugPrintf("DLCTexturePack::loadData - base save loaded: path=%s bytes=%d\n",
+										wstringtofilename(grf.getPath()),
+										dwFileSize);
+								}
+								else
+								{
+									delete [] pbData;
+								}
+							}
+							else
+							{
+								app.DebugPrintf("DLCTexturePack::loadData - Failed to open base save file: %s\n", wstringtofilename(grf.getPath()));
+							}
+						}
+						else
+						{
+							app.DebugPrintf("DLCTexturePack::loadData - Base save file not found for path: %s\n", wstringtofilename(baseSavePath));
+						}
+					}
+
+					if(levelGen != NULL)
+					{
+						DWORD baseSaveSize = 0;
+						PBYTE baseSaveData = levelGen->getBaseSaveData(baseSaveSize);
+						app.DebugPrintf("DLCTexturePack::loadData - levelGen status pack=%s loaded=%d ready=%d requiresBaseSave=%d baseSavePath=%s hasBaseSaveData=%d baseSaveBytes=%d ptr=0x%p\n",
+							wstringtofilename(m_dlcInfoPack->getName()),
+							levelGen->hasLoadedData(),
+							levelGen->ready(),
+							levelGen->requiresBaseSave(),
+							wstringtofilename(levelGen->getBaseSavePath()),
+							levelGen->hasBaseSaveData(),
+							baseSaveSize,
+							baseSaveData);
+					}
+				}
+
+				if(pack->getDLCItemsCount(DLCManager::e_DLCType_Audio) > 0)
+				{
+					DLCAudioFile *dlcFile = (DLCAudioFile *) pack->getFile(DLCManager::e_DLCType_Audio, 0);
+					setHasAudio(true);
+
+					int iOverworldStart = 0;
+					int iOverworldC = dlcFile->GetCountofType(DLCAudioFile::e_AudioType_Overworld);
+					int iNetherStart = iOverworldC;
+					int iNetherC = dlcFile->GetCountofType(DLCAudioFile::e_AudioType_Nether);
+					int iEndStart = iOverworldC + iNetherC;
+					int iEndC = dlcFile->GetCountofType(DLCAudioFile::e_AudioType_End);
+
+					Minecraft::GetInstance()->soundEngine->SetStreamingSounds(
+						iOverworldStart, iOverworldStart + iOverworldC,
+						iNetherStart, iNetherStart + iNetherC,
+						iEndStart, iEndStart + iEndC,
+						iEndStart + iEndC);
+				}
+			}
+
+			// Keep colour table valid even when DLC data load fails.
+			loadColourTable();
+		}
+		else
+		{
+			app.DebugPrintf("DLCTexturePack::loadData - empty data path for pack=%s\n", wstringtofilename(m_dlcInfoPack->getName()));
+		}
+	#endif
+
 		m_bHasLoadedData = true;
-		if (app.getLevelGenerationOptions()) app.getLevelGenerationOptions()->setLoadedData();
+		if (app.getLevelGenerationOptions())
+		{
+			app.getLevelGenerationOptions()->setLoadedData();
+			app.DebugPrintf("DLCTexturePack::loadData - setLoadedData called: lgo=0x%p loaded=%d ready=%d requiresBaseSave=%d baseSavePath=%s hasBaseSaveData=%d\n",
+				app.getLevelGenerationOptions(),
+				app.getLevelGenerationOptions()->hasLoadedData(),
+				app.getLevelGenerationOptions()->ready(),
+				app.getLevelGenerationOptions()->requiresBaseSave(),
+				wstringtofilename(app.getLevelGenerationOptions()->getBaseSavePath()),
+				app.getLevelGenerationOptions()->hasBaseSaveData());
+		}
+		app.DebugPrintf("DLCTexturePack::loadData - finished pack=%s hasData=%d isLoading=%d hasLoadedData=%d\n",
+			wstringtofilename(m_dlcInfoPack->getName()),
+			hasData(),
+			m_bLoadingData,
+			m_bHasLoadedData);
 		app.SetAction(ProfileManager.GetPrimaryPad(), eAppAction_ReloadTexturePack);
 	}
 }
@@ -341,8 +668,12 @@ int DLCTexturePack::packMounted(LPVOID pParam,int iPad,DWORD dwErr,DWORD dwLicen
 						For all the GameRuleHeader files we find
 				*/
 				DLCPack *pack = texturePack->m_dlcInfoPack->GetParentPack();
+				if(pack == NULL)
+				{
+					pack = texturePack->m_dlcInfoPack;
+				}
 				LevelGenerationOptions *levelGen = app.getLevelGenerationOptions();
-				if (levelGen != NULL && !levelGen->hasLoadedData())
+				if (levelGen != NULL)
 				{
 					int gameRulesCount = pack->getDLCItemsCount(DLCManager::e_DLCType_GameRulesHeader);
 					for(int i = 0; i < gameRulesCount; ++i)
@@ -604,7 +935,12 @@ wstring DLCTexturePack::getXuiRootPath()
 
 unsigned int DLCTexturePack::getDLCParentPackId()
 {
-	return m_dlcInfoPack->GetParentPackId();
+	DLCPack *parentPack = m_dlcInfoPack->GetParentPack();
+	if(parentPack != NULL)
+	{
+		return parentPack->GetPackId();
+	}
+	return m_dlcInfoPack->GetPackId();
 }
 
 unsigned char DLCTexturePack::getDLCSubPackId()
@@ -614,7 +950,12 @@ unsigned char DLCTexturePack::getDLCSubPackId()
 
 DLCPack * DLCTexturePack::getDLCInfoParentPack()
 {
-	return m_dlcInfoPack->GetParentPack();
+	DLCPack *parentPack = m_dlcInfoPack->GetParentPack();
+	if(parentPack != NULL)
+	{
+		return parentPack;
+	}
+	return m_dlcInfoPack;
 }
 
 XCONTENTDEVICEID DLCTexturePack::GetDLCDeviceID()

@@ -1309,7 +1309,9 @@ xcopy /q /y /i /s /e "$(ProjectDir)Windows64\GameHDD" "$(OutDir)Windows64\GameHD
 xcopy /q /y /i /s /e "$(ProjectDir)Common\Media" "$(OutDir)Common\Media"
 xcopy /q /y /i /s /e "$(ProjectDir)Common\res" "$(OutDir)Common\res"
 xcopy /q /y /i /s /e "$(ProjectDir)Common\Trial" "$(OutDir)Common\Trial"
-xcopy /q /y /i /s /e "$(ProjectDir)Common\Tutorial" "$(OutDir)Common\Tutorial"</Command>
+xcopy /q /y /i /s /e "$(ProjectDir)Common\Tutorial" "$(OutDir)Common\Tutorial"
+xcopy /q /y /i /s /e "$(ProjectDir)DurangoMedia\DLC" "$(OutDir)Windows64Media\DLC"
+xcopy /q /y /i /s /e "$(ProjectDir)Windows64Media" "$(OutDir)Windows64Media"</Command>
     </PostBuildEvent>
     <ImageXex>
       <ConfigurationFile>$(ProjectDir)xbox\xex-dev.xml</ConfigurationFile>
@@ -1455,7 +1457,7 @@ xcopy /q /y /i /s /e "$(ProjectDir)Common\Media" "$(OutDir)Common\Media" || exit
 xcopy /q /y /i /s /e "$(ProjectDir)Common\res" "$(OutDir)Common\res" || exit /b 0
 xcopy /q /y /i /s /e "$(ProjectDir)Common\Trial" "$(OutDir)Common\Trial" || exit /b 0
 xcopy /q /y /i /s /e "$(ProjectDir)Common\Tutorial" "$(OutDir)Common\Tutorial" || exit /b 0
-xcopy /q /y /i /s /e "$(ProjectDir)DurangoMedia" "$(OutDir)Windows64Media" || exit /b 0
+xcopy /q /y /i /s /e "$(ProjectDir)DurangoMedia\DLC" "$(OutDir)Windows64Media\DLC" || exit /b 0
 xcopy /q /y /i /s /e "$(ProjectDir)Windows64Media" "$(OutDir)Windows64Media" || exit /b 0
 
 exit /b 0</Command>

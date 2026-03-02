@@ -1348,25 +1348,16 @@ void UIController::handleKeyPress(unsigned int iPad, unsigned int key)
 			case ACTION_MENU_UP:        kbDown = KMInput.IsKeyDown(VK_UP);     kbPressed = KMInput.IsKeyPressed(VK_UP);     kbReleased = KMInput.IsKeyReleased(VK_UP);     break;
 			case ACTION_MENU_DOWN:      kbDown = KMInput.IsKeyDown(VK_DOWN);   kbPressed = KMInput.IsKeyPressed(VK_DOWN);   kbReleased = KMInput.IsKeyReleased(VK_DOWN);   break;
 			case ACTION_MENU_LEFT:      kbDown = KMInput.IsKeyDown(VK_LEFT);   kbPressed = KMInput.IsKeyPressed(VK_LEFT);   kbReleased = KMInput.IsKeyReleased(VK_LEFT);   break;
-<<<<<<< HEAD
 			case ACTION_MENU_RIGHT:     kbDown = KMInput.IsKeyDown(VK_RIGHT);  kbPressed = KMInput.IsKeyPressed(VK_RIGHT);  kbReleased = KMInput.IsKeyReleased(VK_RIGHT);  break;
-			case ACTION_MENU_OK:        kbDown = KMInput.IsKeyDown(VK_RETURN); kbPressed = KMInput.IsKeyPressed(VK_RETURN); kbReleased = KMInput.IsKeyReleased(VK_RETURN); break;
-			case ACTION_MENU_A:         kbDown = KMInput.IsKeyDown(VK_RETURN); kbPressed = KMInput.IsKeyPressed(VK_RETURN); kbReleased = KMInput.IsKeyReleased(VK_RETURN); break;
+			case ACTION_MENU_OK:        kbDown = KMInput.IsKeyDown(VK_RETURN) || capturedMouseOkDown; kbPressed = KMInput.IsKeyPressed(VK_RETURN) || m_menuMouseOkPressed || capturedMouseOkPressed; kbReleased = KMInput.IsKeyReleased(VK_RETURN) || m_menuMouseOkReleased || capturedMouseOkReleased; break;
+			case ACTION_MENU_A:         kbDown = KMInput.IsKeyDown(VK_RETURN) || capturedMouseOkDown; kbPressed = KMInput.IsKeyPressed(VK_RETURN) || m_menuMouseOkPressed || capturedMouseOkPressed; kbReleased = KMInput.IsKeyReleased(VK_RETURN) || m_menuMouseOkReleased || capturedMouseOkReleased; break;
 			case ACTION_MENU_CANCEL:    kbDown = KMInput.IsKeyDown(VK_ESCAPE); kbPressed = KMInput.IsKeyPressed(VK_ESCAPE); kbReleased = KMInput.IsKeyReleased(VK_ESCAPE); break;
 			case ACTION_MENU_B:         kbDown = KMInput.IsKeyDown(VK_ESCAPE); kbPressed = KMInput.IsKeyPressed(VK_ESCAPE); kbReleased = KMInput.IsKeyReleased(VK_ESCAPE); break;
 			case ACTION_MENU_PAUSEMENU: kbDown = KMInput.IsKeyDown(VK_ESCAPE); kbPressed = KMInput.IsKeyPressed(VK_ESCAPE); kbReleased = KMInput.IsKeyReleased(VK_ESCAPE); break;
 			case ACTION_MENU_LEFT_SCROLL: kbDown = KMInput.IsKeyDown('Q'); kbPressed = KMInput.IsKeyPressed('Q'); kbReleased = KMInput.IsKeyReleased('Q'); break;
 			case ACTION_MENU_RIGHT_SCROLL: kbDown = KMInput.IsKeyDown('E'); kbPressed = KMInput.IsKeyPressed('E'); kbReleased = KMInput.IsKeyReleased('E'); break;
-=======
-		case ACTION_MENU_RIGHT:     kbDown = KMInput.IsKeyDown(VK_RIGHT);  kbPressed = KMInput.IsKeyPressed(VK_RIGHT);  kbReleased = KMInput.IsKeyReleased(VK_RIGHT);  break;
-		case ACTION_MENU_OK:        kbDown = KMInput.IsKeyDown(VK_RETURN) || capturedMouseOkDown; kbPressed = KMInput.IsKeyPressed(VK_RETURN) || m_menuMouseOkPressed || capturedMouseOkPressed; kbReleased = KMInput.IsKeyReleased(VK_RETURN) || m_menuMouseOkReleased || capturedMouseOkReleased; break;
-		case ACTION_MENU_A:         kbDown = KMInput.IsKeyDown(VK_RETURN) || capturedMouseOkDown; kbPressed = KMInput.IsKeyPressed(VK_RETURN) || m_menuMouseOkPressed || capturedMouseOkPressed; kbReleased = KMInput.IsKeyReleased(VK_RETURN) || m_menuMouseOkReleased || capturedMouseOkReleased; break;
-		case ACTION_MENU_CANCEL:    kbDown = KMInput.IsKeyDown(VK_ESCAPE); kbPressed = KMInput.IsKeyPressed(VK_ESCAPE); kbReleased = KMInput.IsKeyReleased(VK_ESCAPE); break;
-		case ACTION_MENU_B:         kbDown = KMInput.IsKeyDown(VK_ESCAPE); kbPressed = KMInput.IsKeyPressed(VK_ESCAPE); kbReleased = KMInput.IsKeyReleased(VK_ESCAPE); break;
-		case ACTION_MENU_PAUSEMENU: kbDown = KMInput.IsKeyDown(VK_ESCAPE); kbPressed = KMInput.IsKeyPressed(VK_ESCAPE); kbReleased = KMInput.IsKeyReleased(VK_ESCAPE); break;
-		case ACTION_MENU_PAGEUP:    kbPressed = m_menuMousePageUpPressed; break;
-		case ACTION_MENU_PAGEDOWN:  kbPressed = m_menuMousePageDownPressed; break;
->>>>>>> d11456e1 (feat: improve Windows mouse input for menus and containers)
+			case ACTION_MENU_PAGEUP:    kbPressed = m_menuMousePageUpPressed; break;
+			case ACTION_MENU_PAGEDOWN:  kbPressed = m_menuMousePageDownPressed; break;
 		}
 		pressed = pressed || kbPressed;
 		released = released || kbReleased;

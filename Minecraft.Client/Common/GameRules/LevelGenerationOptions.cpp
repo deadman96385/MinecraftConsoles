@@ -11,6 +11,33 @@
 #include "LevelGenerationOptions.h"
 #include "ConsoleGameRules.h"
 
+static void AppendGameRuleAttrLog(const wchar_t *line)
+{
+	wchar_t exePath[MAX_PATH];
+	DWORD len = GetModuleFileNameW(NULL, exePath, MAX_PATH);
+	if(len == 0 || len >= MAX_PATH)
+	{
+		return;
+	}
+
+	wchar_t *slash = wcsrchr(exePath, L'\\');
+	if(slash == NULL)
+	{
+		return;
+	}
+	*slash = 0;
+
+	wstring logPath = wstring(exePath) + L"\\gamerule_attrs.log";
+	FILE *f = _wfopen(logPath.c_str(), L"a");
+	if(f == NULL)
+	{
+		return;
+	}
+
+	fwprintf(f, L"%ls\n", line);
+	fclose(f);
+}
+
 JustGrSource::JustGrSource()
 {
 	m_displayName = L"Default_DisplayName";
@@ -160,6 +187,10 @@ GameRuleDefinition *LevelGenerationOptions::addChild(ConsoleGameRules::EGameRule
 
 void LevelGenerationOptions::addAttribute(const wstring &attributeName, const wstring &attributeValue)
 {
+	wchar_t attrLogLine[1024];
+	swprintf(attrLogLine, 1024, L"LevelGenerationOptions::addAttribute %ls=%ls", attributeName.c_str(), attributeValue.c_str());
+	AppendGameRuleAttrLog(attrLogLine);
+
 	if(attributeName.compare(L"seed") == 0)
 	{
 		m_seed = _fromString<__int64>(attributeValue);

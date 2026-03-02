@@ -51,7 +51,7 @@ public:
 	DWORD GetPackVersion() { return m_packVersion; }
 
 	DLCPack * GetParentPack() { return m_parentPack; }
-	DWORD GetParentPackId() { return m_parentPack->m_packId; }
+	DWORD GetParentPackId() { return (m_parentPack != NULL) ? m_parentPack->m_packId : m_packId; }
 
 	void SetDLCMountIndex(DWORD id) { m_dlcMountIndex = id; }
 	DWORD GetDLCMountIndex();

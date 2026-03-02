@@ -504,6 +504,7 @@ bool GameRuleManager::readRuleFile(LevelGenerationOptions *lgo, byte *dIn, UINT 
 
 	// subfile 
 	UINT numFiles = contentDis->readInt();
+	app.DebugPrintf("GameRuleManager::readRuleFile - numFiles=%u dSize=%u\n", numFiles, dSize);
 	for (UINT i = 0; i < numFiles; i++)
 	{
 		wstring sFilename = contentDis->readUTF();
@@ -520,6 +521,7 @@ bool GameRuleManager::readRuleFile(LevelGenerationOptions *lgo, byte *dIn, UINT 
 
 	// xml objects
 	UINT numObjects = contentDis->readInt();
+	app.DebugPrintf("GameRuleManager::readRuleFile - numObjects=%u\n", numObjects);
 	for(UINT i = 0; i < numObjects; ++i)
 	{
 		int tagId = contentDis->readInt();

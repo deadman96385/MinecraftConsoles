@@ -9,6 +9,7 @@
 #include "DataInputStream.h"
 #include "FileInputStream.h"
 #include "LevelData.h"
+#include "ChunkSource.h"
 #include "DirectoryLevelStorage.h"
 #include "ConsoleSaveFileIO.h"
 
@@ -339,6 +340,21 @@ LevelData *DirectoryLevelStorage::prepareLevel()
 		ConsoleSaveFileInputStream fis = ConsoleSaveFileInputStream(m_saveFile, dataFile);
 		CompoundTag *root = NbtIo::readCompressed(&fis);
 		CompoundTag *tag = root->getCompound(L"Data");
+
+		LevelGenerationOptions *levelGen = app.getLevelGenerationOptions();
+		if(levelGen != NULL && levelGen->requiresBaseSave())
+		{
+			int oldXZSize = tag->getInt(L"XZSize");
+			int oldHellScale = tag->getInt(L"HellScale");
+			if(oldXZSize < LEVEL_MAX_WIDTH || oldHellScale < HELL_LEVEL_MAX_SCALE)
+			{
+				app.DebugPrintf("DirectoryLevelStorage::prepareLevel - overriding base-save level.dat bounds XZSize=%d->%d HellScale=%d->%d\n",
+					oldXZSize, LEVEL_MAX_WIDTH, oldHellScale, HELL_LEVEL_MAX_SCALE);
+			}
+			tag->putInt(L"XZSize", LEVEL_MAX_WIDTH);
+			tag->putInt(L"HellScale", HELL_LEVEL_MAX_SCALE);
+		}
+
 		LevelData *ret = new LevelData(tag);
 		delete root;
 		return ret;

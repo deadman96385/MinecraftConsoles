@@ -37,7 +37,11 @@ ServerPlayer::ServerPlayer(MinecraftServer *server, Level *level, const wstring&
 	lastSentFood = -99999999;
 	lastFoodSaturationZero = true;
 	lastSentExp = -99999999;
+#ifdef _WINDOWS64
+    invulnerableTime = 20 * 10;
+#else
     invulnerableTime = 20 * 3;
+#endif
 	containerCounter = 0;
 	ignoreSlotUpdateHack = false;
 	latency = 0;
@@ -222,6 +226,25 @@ float ServerPlayer::getHeadHeight()
 void ServerPlayer::tick()
 {
     gameMode->tick();
+#ifdef _WINDOWS64
+    // During initial spawn on some DLC worlds, player can be placed intersecting blocks.
+    // While invulnerable, force-clear to nearest open space above current column.
+    if (invulnerableTime > (20 * 5))
+    {
+        int safetySteps = 0;
+        while (level->getCubes(shared_from_this(), bb)->size() != 0 && safetySteps < 32)
+        {
+            double fixX = Mth::floor(x) + 0.5;
+            double fixZ = Mth::floor(z) + 0.5;
+            setPos(fixX, y + 1.0, fixZ);
+            ++safetySteps;
+        }
+        if (safetySteps > 0)
+        {
+            app.DebugPrintf("ServerPlayer::tick spawn correction moved player up %d blocks to %.2f, %.2f, %.2f\n", safetySteps, x, y, z);
+        }
+    }
+#endif
 
     if (invulnerableTime > 0) invulnerableTime--;
     containerMenu->broadcastChanges();

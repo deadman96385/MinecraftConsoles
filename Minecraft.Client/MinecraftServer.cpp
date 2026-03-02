@@ -349,14 +349,48 @@ bool MinecraftServer::initServer(__int64 seed, NetworkGameInitData *initData, DW
             logger.warning("To change this, set \"online-mode\" to \"true\" in the server.settings file.");
         }
 #endif
-        setPlayers(new PlayerList(this));
+		setPlayers(new PlayerList(this));
 
 		// 4J-JEV: Need to wait for levelGenerationOptions to load.
+		int levelGenWaitCount = 0;
 		while ( app.getLevelGenerationOptions() != NULL && !app.getLevelGenerationOptions()->hasLoadedData() )
+		{
+			if((levelGenWaitCount % 5000) == 0)
+			{
+				LevelGenerationOptions *waitLgo = app.getLevelGenerationOptions();
+				app.DebugPrintf("MinecraftServer::initServer - waiting for LevelGenerationOptions (%d ms): lgo=0x%p hasLoadedData=%d ready=%d requiresBaseSave=%d baseSavePath=%s hasBaseSaveData=%d\n",
+					levelGenWaitCount,
+					waitLgo,
+					(waitLgo != NULL) ? waitLgo->hasLoadedData() : 0,
+					(waitLgo != NULL) ? waitLgo->ready() : 0,
+					(waitLgo != NULL) ? waitLgo->requiresBaseSave() : 0,
+					(waitLgo != NULL) ? wstringtofilename(waitLgo->getBaseSavePath()) : "",
+					(waitLgo != NULL) ? waitLgo->hasBaseSaveData() : 0);
+			}
 			Sleep(1);
+			++levelGenWaitCount;
+		}
+		if(levelGenWaitCount > 0)
+		{
+			LevelGenerationOptions *waitLgo = app.getLevelGenerationOptions();
+			app.DebugPrintf("MinecraftServer::initServer - wait complete after %d ms: lgo=0x%p hasLoadedData=%d ready=%d requiresBaseSave=%d hasBaseSaveData=%d\n",
+				levelGenWaitCount,
+				waitLgo,
+				(waitLgo != NULL) ? waitLgo->hasLoadedData() : 0,
+				(waitLgo != NULL) ? waitLgo->ready() : 0,
+				(waitLgo != NULL) ? waitLgo->requiresBaseSave() : 0,
+				(waitLgo != NULL) ? waitLgo->hasBaseSaveData() : 0);
+		}
 
 		if ( app.getLevelGenerationOptions() != NULL && !app.getLevelGenerationOptions()->ready() )
 		{
+			LevelGenerationOptions *waitLgo = app.getLevelGenerationOptions();
+			app.DebugPrintf("MinecraftServer::initServer - LevelGenerationOptions not ready after wait: lgo=0x%p hasLoadedData=%d requiresBaseSave=%d baseSavePath=%s hasBaseSaveData=%d\n",
+				waitLgo,
+				waitLgo->hasLoadedData(),
+				waitLgo->requiresBaseSave(),
+				wstringtofilename(waitLgo->getBaseSavePath()),
+				waitLgo->hasBaseSaveData());
 			// TODO: Stop loading, add error message.
 		}
 

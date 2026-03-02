@@ -1568,6 +1568,14 @@ void UIScene_LoadMenu::LoadLevelGen(LevelGenerationOptions *levelGen)
 	param->seed = 0;
 	param->saveData = NULL;
 	param->levelGen = levelGen;
+	if(levelGen->requiresBaseSave())
+	{
+		// DLC authored worlds can exceed legacy dimensions; use max world sizing
+		// when launching from base-save backed level-gen content.
+		param->xzSize = LEVEL_MAX_WIDTH;
+		param->hellScale = HELL_LEVEL_MAX_SCALE;
+		app.DebugPrintf("UIScene_LoadMenu::LoadLevelGen - forcing max world size for base save (xzSize=%d hellScale=%d)\n", param->xzSize, param->hellScale);
+	}
 
 	if(levelGen->requiresTexturePack())
 	{

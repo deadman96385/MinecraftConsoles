@@ -306,6 +306,12 @@ void PlayerList::validatePlayerSpawnPosition(shared_ptr<ServerPlayer> player)
 	else targetX = Mth::floor(player->x) + 0.5;
 
 	double targetY = floor(player->y);
+#ifdef _WINDOWS64
+	// Preserve precise saved Y on Windows DLC worlds. Flooring can place the player
+	// partially into geometry in authored spawn areas.
+	targetY = player->y;
+#endif
+
 
 	double targetZ = 0;
 	if(player->z < 0) targetZ = Mth::ceil(player->z) - 0.5;
@@ -320,7 +326,41 @@ void PlayerList::validatePlayerSpawnPosition(shared_ptr<ServerPlayer> player)
 	{
         player->setPos(player->x, player->y + 1, player->z);
     }
+
+#ifdef _WINDOWS64
+	// Find a safe standing position: solid block below with two air blocks for feet/head.
+	int spawnX = (int)Mth::floor(player->x);
+	int spawnZ = (int)Mth::floor(player->z);
+	int searchY = (int)Mth::floor(player->y);
+	int topSolidY = level->getTopSolidBlock(spawnX, spawnZ);
+	if (topSolidY > searchY) searchY = topSolidY;
+	if (searchY < 1) searchY = 1;
+
+	bool safeAirFound = false;
+	for (int y = searchY; y < (Level::maxBuildHeight - 2); ++y)
+	{
+		if (level->isSolidBlockingTile(spawnX, y - 1, spawnZ) &&
+			level->isEmptyTile(spawnX, y, spawnZ) &&
+			level->isEmptyTile(spawnX, y + 1, spawnZ))
+		{
+			player->setPos(spawnX + 0.5, y, spawnZ + 0.5);
+			safeAirFound = true;
+			break;
+		}
+	}
+
+	if (!safeAirFound)
+	{
+        app.DebugPrintf("validatePlayerSpawnPosition: no safe air column found at %d,%d from y=%d\n", spawnX, spawnZ, searchY);
+	}
+#endif
+
+	while (level->getCubes(player, player->bb)->size() != 0)
+	{
+		player->setPos(player->x, player->y + 1, player->z);
+	}
 	app.DebugPrintf("Final pos is %f, %f, %f in dimension %d\n", player->x, player->y, player->z, player->dimension);
+
 
 	// 4J Stu - If we are in the nether and the above while loop has put us above the nether then we have a problem
 	// Finding a valid, safe spawn point is potentially computationally expensive (may have to hunt through a large part
@@ -1452,3 +1492,4 @@ void PlayerList::setViewDistance(int newViewDistance)
 {
 	viewDistance = newViewDistance;
 }
+
