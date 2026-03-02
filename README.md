@@ -34,6 +34,35 @@ This project contains the source code of Minecraft Legacy Console Edition v1.3.0
 - **Use / Place**: `Right Click`
 - **Select Item**: `Mouse Wheel` or keys `1` to `9`
 
+### DEADMAU5 Camera Cheats Controls
+
+These controls are available when `DEADMAU5_CAMERA_CHEATS` is enabled in `Minecraft.Client/ClientConstants.h`.
+
+- **Toggle Cheat Fly (noclip-style)**: `F6`
+- **Toggle Fixed Camera Mode**: `F9`
+- **Camera Control Speed**: `Numpad +` / `Numpad -`
+- **Cheat Fly Movement**: `W` `A` `S` `D`
+- **Cheat Fly Up**: `Space`
+- **Cheat Fly Down**: `Shift` (Hold)
+- **Cheat Fly Speed**: `Mouse Wheel` (while cheat fly is active)
+
+#### Camera Orientation Controls
+
+- **When Fixed Camera is OFF (`F9` off)**
+  - **Look Left/Right**: `J` / `L`
+  - **Look Up/Down**: `I` / `K`
+
+- **When Fixed Camera is ON (`F9` on)**
+  - **Camera Distance In/Out**: `U` / `O`
+  - **Camera Rotate Left/Right**: `J` / `L`
+  - **Camera Tilt Up/Down**: `I` / `K`
+  - **FOV Decrease/Increase**: `Y` / `H` (`Y` + `H` resets FOV offset)
+  - **Roll Left/Right**: `N` / `M` (`N` + `M` resets roll)
+
+#### Third-Person Note
+
+`F9` does not automatically switch to third person. Use `F5` to cycle view modes if you want the camera outside the player body (spectator-style framing).
+
 ## Build & Run
 
 1. Install Visual Studio 2022
