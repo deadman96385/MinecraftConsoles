@@ -692,21 +692,22 @@ int LevelRenderer::render(shared_ptr<Mob> player, int layer, double alpha, bool 
 		emptyChunks = 0;
 	}
 
-	double xOff = player->xOld + (player->x - player->xOld) * alpha;
-	double yOff = player->yOld + (player->y - player->yOld) * alpha;
-	double zOff = player->zOld + (player->z - player->zOld) * alpha;
+	double xOff = 0.0;
+	double yOff = 0.0;
+	double zOff = 0.0;
+	mc->gameRenderer->getRenderCameraPosition(xOff, yOff, zOff, alpha);
 
-	double xd = player->x - xOld[playerIndex];
-	double yd = player->y - yOld[playerIndex];
-	double zd = player->z - zOld[playerIndex];
+	double xd = xOff - xOld[playerIndex];
+	double yd = yOff - yOld[playerIndex];
+	double zd = zOff - zOld[playerIndex];
 
 	if (xd * xd + yd * yd + zd * zd > 4 * 4)
 	{
-		xOld[playerIndex] = player->x;
-		yOld[playerIndex] = player->y;
-		zOld[playerIndex] = player->z;
+		xOld[playerIndex] = xOff;
+		yOld[playerIndex] = yOff;
+		zOld[playerIndex] = zOff;
 
-		resortChunks(Mth::floor(player->x), Mth::floor(player->y), Mth::floor(player->z));
+		resortChunks(Mth::floor(xOff), Mth::floor(yOff), Mth::floor(zOff));
 		//		sort(sortedChunks[playerIndex]->begin(),sortedChunks[playerIndex]->end(), DistanceChunkSorter(player));	// 4J - removed - not sorting our chunks anymore
 	}
 	Lighting::turnOff();
@@ -741,10 +742,10 @@ int LevelRenderer::renderChunks(int from, int to, int layer, double alpha)
 #if 1
 	// 4J - cut down version, we're not using offsetted render lists, or a sorted chunk list, anymore
 	mc->gameRenderer->turnOnLightLayer(alpha);		// 4J - brought forward from 1.8.2
-	shared_ptr<Mob> player = mc->cameraTargetPlayer;
-	double xOff = player->xOld + (player->x - player->xOld) * alpha;
-	double yOff = player->yOld + (player->y - player->yOld) * alpha;
-	double zOff = player->zOld + (player->z - player->zOld) * alpha;
+	double xOff = 0.0;
+	double yOff = 0.0;
+	double zOff = 0.0;
+	mc->gameRenderer->getRenderCameraPosition(xOff, yOff, zOff, alpha);
 
 	glPushMatrix();
 	glTranslatef((float)-xOff, (float)-yOff, (float)-zOff);

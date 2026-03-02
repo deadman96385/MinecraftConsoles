@@ -104,7 +104,7 @@ void Player::_init()
 	useItemDuration = 0;
 
 	defaultWalkSpeed = 0.1f;
-	defaultFlySpeed = 0.02f;
+	defaultFlySpeed = 0.026f;
 
 	m_uiGamePrivileges = 0;
 

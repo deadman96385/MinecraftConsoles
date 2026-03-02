@@ -11,6 +11,7 @@
 #include "WaterDropParticle.h"
 #include "GameMode.h"
 #include "CreativeMode.h"
+#include "Input.h"
 #include "Lighting.h"
 #include "Options.h"
 #include "MultiplayerLocalPlayer.h"
@@ -76,6 +77,13 @@ GameRenderer::GameRenderer(Minecraft *mc)
 	thirdRotationO = 0;
 	thirdTilt = 0;
 	thirdTiltO = 0;
+	detachedFreeCameraActive = false;
+	detachedFreeCameraX = 0.0;
+	detachedFreeCameraY = 0.0;
+	detachedFreeCameraZ = 0.0;
+	detachedFreeCameraXO = 0.0;
+	detachedFreeCameraYO = 0.0;
+	detachedFreeCameraZO = 0.0;
 
     accumulatedSmoothXO = 0;
 	accumulatedSmoothYO = 0;
@@ -177,6 +185,34 @@ GameRenderer::~GameRenderer()
 	if(rainZa != NULL) delete [] rainZa;
 }
 
+bool GameRenderer::isDetachedFreeCameraActive() const
+{
+	return detachedFreeCameraActive;
+}
+
+void GameRenderer::getRenderCameraPosition(double& x, double& y, double& z, double alpha) const
+{
+	if (detachedFreeCameraActive)
+	{
+		x = detachedFreeCameraXO + (detachedFreeCameraX - detachedFreeCameraXO) * alpha;
+		y = detachedFreeCameraYO + (detachedFreeCameraY - detachedFreeCameraYO) * alpha;
+		z = detachedFreeCameraZO + (detachedFreeCameraZ - detachedFreeCameraZO) * alpha;
+		return;
+	}
+
+	if (mc->cameraTargetPlayer != NULL)
+	{
+		x = mc->cameraTargetPlayer->xo + (mc->cameraTargetPlayer->x - mc->cameraTargetPlayer->xo) * alpha;
+		y = mc->cameraTargetPlayer->yo + (mc->cameraTargetPlayer->y - mc->cameraTargetPlayer->yo) * alpha;
+		z = mc->cameraTargetPlayer->zo + (mc->cameraTargetPlayer->z - mc->cameraTargetPlayer->zo) * alpha;
+		return;
+	}
+
+	x = 0.0;
+	y = 0.0;
+	z = 0.0;
+}
+
 void GameRenderer::tick(bool first)		// 4J - add bFirst
 { 
 	tickFov();
@@ -260,6 +296,15 @@ void GameRenderer::tick(bool first)		// 4J - add bFirst
 		}
 	}
 
+	if (!(thirdDistance > -1000000.0f && thirdDistance < 1000000.0f)) thirdDistance = 4.0f;
+	if (!(thirdRotation > -1000000.0f && thirdRotation < 1000000.0f)) thirdRotation = 0.0f;
+	if (!(thirdTilt > -1000000.0f && thirdTilt < 1000000.0f)) thirdTilt = 0.0f;
+	if (!(cameraRoll > -1000000.0f && cameraRoll < 1000000.0f)) cameraRoll = 0.0f;
+	if (thirdDistance < 0.1f) thirdDistance = 0.1f;
+	if (thirdDistance > 64.0f) thirdDistance = 64.0f;
+	if (thirdTilt < -89.0f) thirdTilt = -89.0f;
+	if (thirdTilt > 89.0f) thirdTilt = 89.0f;
+
     if (mc->options->smoothCamera)
 	{
         // update player view in tick() instead of render() to maintain
@@ -279,7 +324,80 @@ void GameRenderer::tick(bool first)		// 4J - add bFirst
 		mc->cameraTargetPlayer = dynamic_pointer_cast<Mob>(mc->player);
 	}
 
-	float brr = mc->level->getBrightness(Mth::floor(mc->cameraTargetPlayer->x), Mth::floor(mc->cameraTargetPlayer->y), Mth::floor(mc->cameraTargetPlayer->z));
+	detachedFreeCameraXO = detachedFreeCameraX;
+	detachedFreeCameraYO = detachedFreeCameraY;
+	detachedFreeCameraZO = detachedFreeCameraZ;
+
+	shared_ptr<LocalPlayer> localplayer = dynamic_pointer_cast<LocalPlayer>(mc->cameraTargetPlayer);
+	bool wantsDetachedFreeCamera =
+		ClientConstants::DEADMAU5_CAMERA_CHEATS &&
+		mc->screen == NULL &&
+		mc->options->isFlying &&
+		mc->options->fixedCamera &&
+		localplayer != NULL &&
+		localplayer->ThirdPersonView();
+
+	if (wantsDetachedFreeCamera)
+	{
+		double px = mc->cameraTargetPlayer->x;
+		double py = mc->cameraTargetPlayer->y;
+		double pz = mc->cameraTargetPlayer->z;
+
+		float yaw = thirdRotation;
+		float pitch = thirdTilt;
+
+		if (!detachedFreeCameraActive)
+		{
+			yaw = mc->cameraTargetPlayer->yRot;
+			pitch = mc->cameraTargetPlayer->xRot;
+			if (pitch > 89.0f) pitch = 89.0f;
+			if (pitch < -89.0f) pitch = -89.0f;
+			thirdRotation = thirdRotationO = yaw;
+			thirdTilt = thirdTiltO = pitch;
+			detachedFreeCameraX = px;
+			detachedFreeCameraY = py;
+			detachedFreeCameraZ = pz;
+			detachedFreeCameraXO = detachedFreeCameraX;
+			detachedFreeCameraYO = detachedFreeCameraY;
+			detachedFreeCameraZO = detachedFreeCameraZ;
+		}
+
+		detachedFreeCameraActive = true;
+
+		float forwardInput = 0.0f;
+		float strafeInput = 0.0f;
+		float verticalInput = 0.0f;
+		if (localplayer->input != NULL)
+		{
+			forwardInput = localplayer->input->ya;
+			strafeInput = localplayer->input->xa;
+			if (localplayer->input->jumping) verticalInput += 1.0f;
+			if (localplayer->input->sneaking) verticalInput -= 1.0f;
+		}
+
+		float speed = 0.20f * mc->options->flySpeed;
+		if (localplayer->isSprinting()) speed *= 1.5f;
+
+		double fx = -Mth::sin(yaw / 180.0f * PI) * Mth::cos(pitch / 180.0f * PI);
+		double fy = -Mth::sin(pitch / 180.0f * PI);
+		double fz = Mth::cos(yaw / 180.0f * PI) * Mth::cos(pitch / 180.0f * PI);
+		double rx = Mth::cos(yaw / 180.0f * PI);
+		double rz = Mth::sin(yaw / 180.0f * PI);
+
+		detachedFreeCameraX += (fx * forwardInput + rx * strafeInput) * speed;
+		detachedFreeCameraY += (fy * forwardInput + verticalInput) * speed;
+		detachedFreeCameraZ += (fz * forwardInput + rz * strafeInput) * speed;
+	}
+	else
+	{
+		detachedFreeCameraActive = false;
+	}
+
+	double cameraX = 0.0;
+	double cameraY = 0.0;
+	double cameraZ = 0.0;
+	getRenderCameraPosition(cameraX, cameraY, cameraZ, 1.0);
+	float brr = mc->level->getBrightness(Mth::floor(cameraX), Mth::floor(cameraY), Mth::floor(cameraZ));
 	float whiteness = (3 - mc->options->viewDistance) / 3.0f;
 	float fogBrT = brr * (1 - whiteness) + whiteness;
 	fogBr += (fogBrT - fogBr) * 0.1f;
@@ -301,9 +419,32 @@ void GameRenderer::pick(float a)
 	if (mc->level == NULL) return;
 
 	double range = mc->gameMode->getPickRange();
+	bool detachedCamera = detachedFreeCameraActive;
+	Vec3 *from = NULL;
+	Vec3 *b = NULL;
 	delete mc->hitResult;
 	MemSect(31);
-	mc->hitResult = mc->cameraTargetPlayer->pick(range, a);
+	if (detachedCamera)
+	{
+		double x = 0.0;
+		double y = 0.0;
+		double z = 0.0;
+		getRenderCameraPosition(x, y, z, a);
+		from = Vec3::newTemp(x, y, z);
+		float yaw = thirdRotationO + (thirdRotation - thirdRotationO) * a;
+		float pitch = thirdTiltO + (thirdTilt - thirdTiltO) * a;
+		b = Vec3::newTemp(
+			-Mth::sin(yaw / 180.0f * PI) * Mth::cos(pitch / 180.0f * PI),
+			-Mth::sin(pitch / 180.0f * PI),
+			 Mth::cos(yaw / 180.0f * PI) * Mth::cos(pitch / 180.0f * PI));
+		mc->hitResult = mc->level->clip(from, from->add(b->x * range, b->y * range, b->z * range));
+	}
+	else
+	{
+		mc->hitResult = mc->cameraTargetPlayer->pick(range, a);
+		from = mc->cameraTargetPlayer->getPos(a);
+		b = mc->cameraTargetPlayer->getViewVector(a);
+	}
 	MemSect(0);
 
 	// 4J - added - stop blocks right at the edge of the world from being pickable so we shouldn't be able to directly destroy or create anything there
@@ -331,7 +472,6 @@ void GameRenderer::pick(float a)
 	}
 
 	double dist = range;
-	Vec3 *from = mc->cameraTargetPlayer->getPos(a);
 
 	if (mc->gameMode->hasFarPickRange())
 	{
@@ -348,11 +488,19 @@ void GameRenderer::pick(float a)
 		dist = mc->hitResult->pos->distanceTo(from);
 	}
 
-    Vec3 *b = mc->cameraTargetPlayer->getViewVector(a);
     Vec3 *to = from->add(b->x * range, b->y * range, b->z * range);
     hovered = nullptr;
     float overlap = 1;
-    vector<shared_ptr<Entity> > *objects = mc->level->getEntities(mc->cameraTargetPlayer, mc->cameraTargetPlayer->bb->expand(b->x * (range), b->y * (range), b->z * (range))->grow(overlap, overlap, overlap));
+	AABB *searchBox = NULL;
+	if (detachedCamera)
+	{
+		searchBox = AABB::newTemp(from->x, from->y, from->z, from->x, from->y, from->z)->expand(b->x * range, b->y * range, b->z * range)->grow(overlap, overlap, overlap);
+	}
+	else
+	{
+		searchBox = mc->cameraTargetPlayer->bb->expand(b->x * range, b->y * range, b->z * range)->grow(overlap, overlap, overlap);
+	}
+	vector<shared_ptr<Entity> > *objects = mc->level->getEntities(mc->cameraTargetPlayer, searchBox);
     double nearest = dist;
 
 	AUTO_VAR(itEnd, objects->end());
@@ -408,9 +556,13 @@ float GameRenderer::GetFovVal()
 void GameRenderer::tickFov()
 {
 	shared_ptr<LocalPlayer>player = dynamic_pointer_cast<LocalPlayer>(mc->cameraTargetPlayer);
+	if (player == NULL)
+	{
+		player = dynamic_pointer_cast<LocalPlayer>(mc->player);
+	}
 
 	int playerIdx = player ? player->GetXboxPad() : 0;
-    tFov[playerIdx] = player->getFieldOfViewModifier();
+    tFov[playerIdx] = player ? player->getFieldOfViewModifier() : 1.0f;
 
     oFov[playerIdx] = fov[playerIdx];
     fov[playerIdx] += (tFov[playerIdx] - fov[playerIdx]) * 0.5f;
@@ -421,6 +573,10 @@ float GameRenderer::getFov(float a, bool applyEffects)
 	if (cameraFlip > 0 ) return 90;
 
 	shared_ptr<LocalPlayer> player = dynamic_pointer_cast<LocalPlayer>(mc->cameraTargetPlayer);
+	if (player == NULL)
+	{
+		player = dynamic_pointer_cast<LocalPlayer>(mc->player);
+	}
 	int playerIdx = player ? player->GetXboxPad() : 0;
 	float fov = m_fov;//70;
     if (applyEffects)
@@ -428,15 +584,18 @@ float GameRenderer::getFov(float a, bool applyEffects)
         fov += mc->options->fov * 40;
         fov *= this->oFov[playerIdx] + (this->fov[playerIdx] - this->oFov[playerIdx]) * a;
     }
-	if (player->getHealth() <= 0)
+	if (player != NULL && player->getHealth() <= 0)
 	{
 		float duration = player->deathTime + a;
 
 		fov /= ((1 - 500 / (duration + 500)) * 2.0f + 1);
 	}
 
-    int t = Camera::getBlockAt(mc->level, player, a);
-    if (t != 0 && Tile::tiles[t]->material == Material::water) fov = fov * 60 / 70;
+	if (player != NULL)
+	{
+		int t = Camera::getBlockAt(mc->level, player, a);
+		if (t != 0 && Tile::tiles[t]->material == Material::water) fov = fov * 60 / 70;
+	}
 
 	return fov + fovOffsetO + (fovOffset - fovOffsetO) * a;
 
@@ -490,7 +649,27 @@ void GameRenderer::bobView(float a)
 void GameRenderer::moveCameraToPlayer(float a)
 {
 	shared_ptr<Mob> player = mc->cameraTargetPlayer;
+	if (player == NULL) return;
 	shared_ptr<LocalPlayer> localplayer = dynamic_pointer_cast<LocalPlayer>(mc->cameraTargetPlayer);
+	int thirdPersonView = 0;
+	if (localplayer != NULL) thirdPersonView = localplayer->ThirdPersonView();
+	if (detachedFreeCameraActive)
+	{
+		double x = 0.0;
+		double y = 0.0;
+		double z = 0.0;
+		getRenderCameraPosition(x, y, z, a);
+		float rotationY = thirdRotationO + (thirdRotation - thirdRotationO) * a;
+		float xRot = thirdTiltO + (thirdTilt - thirdTiltO) * a;
+
+		glRotatef(cameraRollO + (cameraRoll - cameraRollO) * a, 0, 0, 1);
+		glRotatef(xRot, 1, 0, 0);
+		glRotatef(rotationY + 180.0f, 0, 1, 0);
+		glTranslatef((float)-x, (float)-y, (float)-z);
+
+		isInClouds = mc->levelRenderer->isInCloud(x, y, z, a);
+		return;
+	}
 	float heightOffset = player->heightOffset - 1.62f;
 
 	double x = player->xo + (player->x - player->xo) * a;
@@ -520,7 +699,7 @@ void GameRenderer::moveCameraToPlayer(float a)
 	}
 	// 4J-PB - changing this to be per player
 	//else if (mc->options->thirdPersonView)
-	else if (localplayer->ThirdPersonView())
+	else if (thirdPersonView)
 	{
 		double cameraDist = thirdDistanceO + (thirdDistance - thirdDistanceO) * a;
 
@@ -541,7 +720,7 @@ void GameRenderer::moveCameraToPlayer(float a)
 			float xRot = player->xRotO + (player->xRot - player->xRotO) * a;
 
 			// Thirdperson view values are now 0 for disabled, 1 for original mode, 2 for reversed.
-			if( localplayer->ThirdPersonView() == 2 )
+			if( thirdPersonView == 2 )
 			{
 				// Reverse y rotation - note that this is only used in doing collision to calculate our view
 				// distance, the actual rotation itself is just below this else {} block
@@ -589,7 +768,7 @@ void GameRenderer::moveCameraToPlayer(float a)
 	if (!mc->options->fixedCamera)
 	{
 		glRotatef(player->xRotO + (player->xRot - player->xRotO) * a, 1, 0, 0);
-		if( localplayer->ThirdPersonView() == 2 )
+		if( thirdPersonView == 2 )
 		{
 			// Third person view is now 0 for disabled, 1 for original, 2 for flipped
 			glRotatef(player->yRotO + (player->yRot - player->yRotO) * a, 0, 1, 0);
@@ -720,13 +899,11 @@ void GameRenderer::renderItemInHand(float a, int eye)
 	if (cameraFlip > 0) return;
 
 	shared_ptr<LocalPlayer> localplayer = dynamic_pointer_cast<LocalPlayer>(mc->cameraTargetPlayer);
+	if (localplayer == NULL) return;
 
 	// 4J-PB - to turn off the hand for screenshots, but not when the item held is a map
-	if ( localplayer!=NULL)
-	{
-		shared_ptr<ItemInstance> item = localplayer->inventory->getSelected();
-		if(!(item && item->getItem()->id==Item::map_Id)  && app.GetGameSettings(localplayer->GetXboxPad(),eGameSetting_DisplayHand)==0 ) return;
-	}
+	shared_ptr<ItemInstance> item = localplayer->inventory->getSelected();
+	if(!(item && item->getItem()->id==Item::map_Id)  && app.GetGameSettings(localplayer->GetXboxPad(),eGameSetting_DisplayHand)==0 ) return;
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
@@ -1272,9 +1449,10 @@ void GameRenderer::renderLevel(float a, __int64 until)
 	shared_ptr<Mob> cameraEntity = mc->cameraTargetPlayer;
 	LevelRenderer *levelRenderer = mc->levelRenderer;
 	ParticleEngine *particleEngine = mc->particleEngine;
-	double xOff = cameraEntity->xOld + (cameraEntity->x - cameraEntity->xOld) * a;
-	double yOff = cameraEntity->yOld + (cameraEntity->y - cameraEntity->yOld) * a;
-	double zOff = cameraEntity->zOld + (cameraEntity->z - cameraEntity->zOld) * a;
+	double xOff = 0.0;
+	double yOff = 0.0;
+	double zOff = 0.0;
+	getRenderCameraPosition(xOff, yOff, zOff, a);
 
 	for (int i = 0; i < 2; i++)
 	{
@@ -1360,14 +1538,13 @@ void GameRenderer::renderLevel(float a, __int64 until)
 			PIXBeginNamedEvent(0,"Entity render");
 			// 4J - for entities, don't include the "a" factor that interpolates from the old to new position, as the AABBs for the entities are already fully at the new position
 			// This fixes flickering minecarts, and pigs that you are riding on
-			frustum->prepare(cameraEntity->x,cameraEntity->y,cameraEntity->z);
+			frustum->prepare(xOff, yOff, zOff);
 			// 4J Stu - When rendering entities, in the end if the dragon is hurt or we have a lot of entities we can end up wrapping
 			// our index into the temp Vec3 cache and overwrite the one that was storing the camera position
 			// Fix for #77745 - TU9: Content: Gameplay: Items and mobs not belonging to end world are disappearing when Enderdragon is damaged.
-			Vec3 *cameraPosTemp = cameraEntity->getPos(a);
-			cameraPos->x = cameraPosTemp->x;
-			cameraPos->y = cameraPosTemp->y;
-			cameraPos->z = cameraPosTemp->z;
+			cameraPos->x = xOff;
+			cameraPos->y = yOff;
+			cameraPos->z = zOff;
 			levelRenderer->renderEntities(cameraPos, frustum, a);
 #ifdef __PSVITA__
 			// AP - make sure we're using the Alpha cut out effect for particles

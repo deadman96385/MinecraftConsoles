@@ -42,6 +42,13 @@ private:
 	float thirdRotationO;
 	float thirdTilt;
 	float thirdTiltO;
+	bool detachedFreeCameraActive;
+	double detachedFreeCameraX;
+	double detachedFreeCameraY;
+	double detachedFreeCameraZ;
+	double detachedFreeCameraXO;
+	double detachedFreeCameraYO;
+	double detachedFreeCameraZO;
     float accumulatedSmoothXO, accumulatedSmoothYO;
     float tickSmoothXO, tickSmoothYO, lastTickA;
 	Vec3 *cameraPos;		// 4J added
@@ -76,6 +83,8 @@ public:
 public:
 	void tick(bool bFirst);
     void pick(float a);
+    bool isDetachedFreeCameraActive() const;
+    void getRenderCameraPosition(double& x, double& y, double& z, double alpha) const;
 private:
 	void tickFov();
 	float getFov(float a, bool applyEffects);

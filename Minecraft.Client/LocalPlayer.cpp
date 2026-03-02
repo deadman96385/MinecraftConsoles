@@ -124,8 +124,14 @@ LocalPlayer::~LocalPlayer()
 // 4J - added noEntityCubes parameter
 void LocalPlayer::move(double xa, double ya, double za, bool noEntityCubes)
 {
-    if (ClientConstants::DEADMAU5_CAMERA_CHEATS)
+	if (ClientConstants::DEADMAU5_CAMERA_CHEATS)
 	{
+		if (shared_from_this() == minecraft->player && minecraft->options->isFlying && minecraft->options->fixedCamera && ThirdPersonView())
+		{
+			noPhysics = false;
+			Player::move(0.0, 0.0, 0.0, noEntityCubes);
+			return;
+		}
         if (shared_from_this() == minecraft->player && minecraft->options->isFlying)
 		{
             noPhysics = true;
@@ -153,7 +159,13 @@ void LocalPlayer::move(double xa, double ya, double za, bool noEntityCubes)
 void LocalPlayer::calculateFlight(float xa, float ya, float za)
 {
     xa = xa * minecraft->options->flySpeed;
-    ya = 0;
+    ya = 0.0f;
+    if (input != NULL)
+    {
+        if (input->jumping) ya += 1.0f;
+        if (input->sneaking) ya -= 1.0f;
+    }
+    ya = ya * minecraft->options->flySpeed;
     za = za * minecraft->options->flySpeed;
 
     flyX = smoothFlyX.getNewDeltaValue(xa, .35f * minecraft->options->sensitivity);
@@ -401,12 +413,11 @@ void LocalPlayer::aiStep()
 	if (abilities.flying)
 	{
 		//            yd = 0;
-		// 4J - note that the 0.42 added for going down is to make it match with what happens when you jump - jumping itself adds 0.42 to yd in Mob::jumpFromGround
-		if (ullButtonsPressed & (1LL<<MINECRAFT_ACTION_SNEAK_TOGGLE) ) yd -= ( 0.15 + 0.42 );		// 4J - for flying mode, MINECRAFT_ACTION_SNEAK_TOGGLE isn't a toggle but just indicates that this button is down
+		if (ullButtonsPressed & (1LL<<MINECRAFT_ACTION_SNEAK_TOGGLE) ) yd -= 0.08f;
 		if (input->jumping)
 		{
 			noJumpDelay = 0;
-			yd += 0.15;
+			yd += 0.08f;
 		}
 
 		// snap y rotation to nearest 90 degree axis aligned value

@@ -857,6 +857,14 @@ void Gui::render(float a, bool mouseFree, int xMouse, int yMouse)
 	MemSect(0);
 #endif
 
+	if (bDisplayGui && minecraft->gameRenderer->isDetachedFreeCameraActive())
+	{
+		wstring freecamLabel = L"Freecam Mode";
+		int freecamX = iWidthOffset + screenWidth - iSafezoneXHalf - font->width(freecamLabel) - 4;
+		int freecamY = iHeightOffset + iSafezoneYHalf + 4;
+		font->drawShadow(freecamLabel, freecamX, freecamY, 0x7fffd4);
+	}
+
 	lastTickA = a;
 	// 4J Stu - This is now displayed in a xui scene
 #if 0
